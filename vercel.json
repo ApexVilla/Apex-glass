@@ -1,8 +1,8 @@
 {
-  "buildCommand": "npm run build",
-  "outputDirectory": "dist",
-  "devCommand": "npm run dev",
-  "installCommand": "npm install",
+  "buildCommand": "cd apex-auto-glass-erp && npm install && npm run build",
+  "outputDirectory": "apex-auto-glass-erp/dist",
+  "devCommand": "cd apex-auto-glass-erp && npm run dev",
+  "installCommand": "cd apex-auto-glass-erp && npm install",
   "framework": "vite",
   "rewrites": [
     {
