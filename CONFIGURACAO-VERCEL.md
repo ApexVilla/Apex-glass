@@ -22,14 +22,16 @@ O `rootDirectory` NÃO pode estar no `vercel.json`. Ele deve ser configurado ape
 
 **IMPORTANTE**: Sem essa configuração, o Vercel não encontrará o projeto!
 
-### 2. Configurar Build Settings
+### 2. Configurar Build Settings (OPCIONAL - já configurado no vercel.json)
 
-No mesmo painel, em **Build and Development Settings**:
+O `vercel.json` já está configurado com os comandos corretos. Se quiser sobrescrever, configure:
 
 - **Framework Preset**: `Vite`
-- **Build Command**: `npm run build`
-- **Output Directory**: `dist`
-- **Install Command**: `npm install`
+- **Build Command**: `cd apex-auto-glass-erp && npm install && npm run build`
+- **Output Directory**: `apex-auto-glass-erp/dist`
+- **Install Command**: `cd apex-auto-glass-erp && npm install`
+
+**Nota**: O `vercel.json` já contém essas configurações, então não é necessário configurar manualmente.
 
 ### 3. Configurar Variáveis de Ambiente
 
