@@ -1,0 +1,3 @@
+#!/bin/bash
+cd "$(dirname "$0")/apex-auto-glass-erp" && npm run dev
+
