@@ -6,7 +6,11 @@ O erro `NOT_FOUND` ocorre porque o Vercel precisa saber onde está o projeto.
 
 ## Solução
 
-### 1. Configurar Root Directory no Vercel
+### ⚠️ IMPORTANTE: Root Directory deve ser configurado no painel do Vercel
+
+O `rootDirectory` NÃO pode estar no `vercel.json`. Ele deve ser configurado apenas nas configurações do projeto.
+
+### 1. Configurar Root Directory no Vercel (OBRIGATÓRIO)
 
 1. Acesse o painel do Vercel: https://vercel.com
 2. Vá em **Settings** → **General**
@@ -15,6 +19,8 @@ O erro `NOT_FOUND` ocorre porque o Vercel precisa saber onde está o projeto.
    apex-auto-glass-erp
    ```
 4. Clique em **Save**
+
+**IMPORTANTE**: Sem essa configuração, o Vercel não encontrará o projeto!
 
 ### 2. Configurar Build Settings
 
