@@ -8,12 +8,13 @@
   NPM_VERSION = "9"
 
 # Redirects para SPA (Single Page Application)
+# O arquivo _redirects na pasta public é copiado para dist durante o build
+# e tem prioridade sobre esta configuração
 # Todas as rotas devem redirecionar para index.html
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
-  force = false
 
 # Headers de segurança
 [[headers]]
