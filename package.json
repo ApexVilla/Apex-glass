@@ -4,7 +4,6 @@
   "private": true,
   "scripts": {
     "build": "cd apex-auto-glass-erp && npm install && npm run build",
-    "install": "cd apex-auto-glass-erp && npm install",
     "dev": "cd apex-auto-glass-erp && npm run dev"
   },
   "dependencies": {
