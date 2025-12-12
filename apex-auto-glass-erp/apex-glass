@@ -1,0 +1,136 @@
+#!/bin/bash
+
+# Comando apex-glass para abrir o ERP no navegador
+# Uso: apex-glass
+
+# Detecta o diretório do script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# Detecta o IP local
+LOCAL_IP=$(hostname -I | awk '{print $1}')
+
+echo "🚀 Apex Glass ERP"
+echo ""
+
+# Verifica se o servidor está rodando
+if ! lsof -Pi :8081 -sTCP:LISTEN -t >/dev/null 2>&1; then
+    echo "⚠️  Servidor não está rodando!"
+    echo ""
+    echo "Deseja iniciar o servidor agora?"
+    echo ""
+    echo "1) Sim, iniciar servidor e abrir no navegador"
+    echo "2) Não, apenas mostrar como iniciar"
+    echo ""
+    read -p "Digite sua opção (1 ou 2): " iniciar
+    
+    if [ "$iniciar" = "1" ]; then
+        echo ""
+        echo "Escolha como deseja acessar:"
+        echo ""
+        echo "1) Pelo IP (http://${LOCAL_IP}:8081) - Para acessar de outros dispositivos"
+        echo "2) Pelo Localhost (http://localhost:8081) - Apenas neste computador"
+        echo ""
+        read -p "Digite sua opção (1 ou 2): " opcao
+        
+        case $opcao in
+            1)
+                URL="http://${LOCAL_IP}:8081"
+                ;;
+            2)
+                URL="http://localhost:8081"
+                ;;
+            *)
+                URL="http://${LOCAL_IP}:8081"
+                ;;
+        esac
+        
+        echo ""
+        echo "✅ Iniciando servidor..."
+        echo "🛑 Pressione Ctrl+C para parar o servidor"
+        echo "📱 O sistema será aberto em: ${URL}"
+        echo ""
+        
+        # Inicia o servidor em background
+        npm run dev > /dev/null 2>&1 &
+        SERVER_PID=$!
+        
+        # Aguarda o servidor iniciar
+        sleep 10
+        
+        # Verifica se o servidor iniciou
+        if lsof -Pi :8081 -sTCP:LISTEN -t >/dev/null 2>&1; then
+            echo "✅ Servidor iniciado!"
+            echo "📱 Abrindo: ${URL}"
+            echo ""
+            
+            # Abre o navegador
+            if command -v xdg-open &> /dev/null; then
+                xdg-open "${URL}" 2>/dev/null &
+            elif command -v firefox &> /dev/null; then
+                firefox "${URL}" 2>/dev/null &
+            elif command -v google-chrome &> /dev/null; then
+                google-chrome "${URL}" 2>/dev/null &
+            elif command -v chromium &> /dev/null; then
+                chromium "${URL}" 2>/dev/null &
+            fi
+            
+            # Aguarda o servidor
+            wait $SERVER_PID
+        else
+            echo "❌ Erro ao iniciar o servidor"
+            kill $SERVER_PID 2>/dev/null
+        fi
+        exit 0
+    else
+        echo ""
+        echo "Para iniciar o servidor, execute:"
+        echo "  cd $SCRIPT_DIR"
+        echo "  npm run dev"
+        echo ""
+        exit 0
+    fi
+fi
+
+# Servidor está rodando, pergunta como abrir
+echo "Servidor está rodando! 🎉"
+echo ""
+echo "Escolha como deseja abrir:"
+echo ""
+echo "1) Pelo IP (http://${LOCAL_IP}:8081) - Para acessar de outros dispositivos"
+echo "2) Pelo Localhost (http://localhost:8081) - Apenas neste computador"
+echo ""
+read -p "Digite sua opção (1 ou 2): " opcao
+
+case $opcao in
+    1)
+        URL="http://${LOCAL_IP}:8081"
+        ;;
+    2)
+        URL="http://localhost:8081"
+        ;;
+    *)
+        URL="http://${LOCAL_IP}:8081"
+        ;;
+esac
+
+echo ""
+echo "📱 Abrindo: ${URL}"
+echo ""
+
+# Abre o navegador
+if command -v xdg-open &> /dev/null; then
+    xdg-open "${URL}" 2>/dev/null &
+elif command -v gnome-open &> /dev/null; then
+    gnome-open "${URL}" 2>/dev/null &
+elif command -v firefox &> /dev/null; then
+    firefox "${URL}" 2>/dev/null &
+elif command -v google-chrome &> /dev/null; then
+    google-chrome "${URL}" 2>/dev/null &
+elif command -v chromium &> /dev/null; then
+    chromium "${URL}" 2>/dev/null &
+else
+    echo "⚠️  Não foi possível abrir o navegador automaticamente."
+    echo "📱 Abra manualmente: ${URL}"
+fi
+

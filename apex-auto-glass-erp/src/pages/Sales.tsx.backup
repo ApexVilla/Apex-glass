@@ -1,0 +1,2636 @@
+import { useEffect, useState } from 'react';
+import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
+import { PageHeader } from '@/components/common/PageHeader';
+import { SearchInput } from '@/components/common/SearchInput';
+import { DataTable } from '@/components/common/DataTable';
+import { StatusBadge, getPaymentStatus } from '@/components/common/StatusBadge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Combobox } from '@/components/ui/combobox';
+import { toast } from '@/hooks/use-toast';
+import { formatCurrency, formatDate } from '@/lib/format';
+import { Edit, Trash2, Loader2, ShoppingCart, Plus, X, Search, ChevronRight, ChevronLeft, User, Package, CreditCard, Mail, Phone, MapPin, FileText, AlertTriangle, CheckCircle2, Shield } from 'lucide-react';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { getPriceControlSettings, validateItemPrice, PriceControlSettings, PriceValidationResult } from '@/services/priceControlService';
+import { SaleApprovalDialog } from '@/components/sales/SaleApprovalDialog';
+import { PickingIssuesDialog } from '@/components/sales/PickingIssuesDialog';
+import {
+  addSaleStatus,
+  removeSaleStatus,
+  canInvoiceSale,
+  requiresCreditApproval,
+  requiresDiscountApproval,
+  requiresStockSeparation,
+  getStatusDescription,
+  getStatusColor,
+  canCustomerMakeCreditSale
+} from '@/services/saleStatusService';
+
+export default function Sales() {
+  const { user, profile, company } = useAuth();
+  const [sales, setSales] = useState<any[]>([]);
+  const [customers, setCustomers] = useState<any[]>([]);
+  const [products, setProducts] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [selectedSale, setSelectedSale] = useState<any>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [formData, setFormData] = useState({ customer_id: '', vehicle_id: '', payment_method: 'cash', payment_status: 'pending', discount: 0, notes: '', sale_type: 'retail', tipo_operacao: 'auto' });
+  const [saleItems, setSaleItems] = useState<any[]>([]);
+  const [productSearchOpen, setProductSearchOpen] = useState(false);
+  const [productSearchInput, setProductSearchInput] = useState('');
+  const [itemFilter, setItemFilter] = useState<'all' | 'produto' | 'servico'>('all');
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [customerVehicles, setCustomerVehicles] = useState<any[]>([]);
+  const [selectedCustomerData, setSelectedCustomerData] = useState<any>(null);
+  const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1); // 1 = Cliente, 2 = Itens, 3 = Pagamento
+  const [priceControlSettings, setPriceControlSettings] = useState<PriceControlSettings | null>(null);
+  const [editingItemPrice, setEditingItemPrice] = useState<string | null>(null);
+  const [itemPriceEdit, setItemPriceEdit] = useState({ price: 0, discount: 0 });
+  const [approvalDialogOpen, setApprovalDialogOpen] = useState(false);
+  const [saleToApprove, setSaleToApprove] = useState<any>(null);
+  const [pickingIssuesDialogOpen, setPickingIssuesDialogOpen] = useState(false);
+  const [saleWithIssues, setSaleWithIssues] = useState<any>(null);
+
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(5);
+  const [totalCount, setTotalCount] = useState(0);
+
+  useEffect(() => {
+    loadData();
+    loadPriceControlSettings();
+  }, [currentPage, pageSize]);
+
+  const loadPriceControlSettings = async () => {
+    if (!company?.id && !profile?.company_id) return;
+    try {
+      const settings = await getPriceControlSettings(profile.company_id);
+      setPriceControlSettings(settings);
+    } catch (error) {
+      console.error('Erro ao carregar configurações de controle de preço:', error);
+    }
+  };
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      // Calcular range para paginação
+      const from = (currentPage - 1) * pageSize;
+      const to = from + pageSize - 1;
+
+      const [salesRes, customersRes, productsRes] = await Promise.all([
+        supabase
+          .from('sales')
+          .select('id, sale_number, customer_id, seller_id, service_order_id, subtotal, discount, total, payment_method, payment_status, notes, status_codes, status_venda, credit_status, picking_issues, created_at, updated_at, customer:customers(name)', { count: 'exact' })
+          .order('created_at', { ascending: false })
+          .range(from, to),
+        supabase.from('customers').select('*').order('name'),
+        supabase.from('products').select('*').eq('is_active', true).order('name'),
+      ]);
+
+      // Garantir que status_codes seja um array e normalizar
+      if (salesRes.data) {
+        salesRes.data = salesRes.data.map((sale: any) => {
+          let statusCodes: string[] = [];
+          
+          if (sale.status_codes) {
+            if (Array.isArray(sale.status_codes)) {
+              statusCodes = sale.status_codes
+                .map((c: any) => String(c).toUpperCase().trim())
+                .filter((c: string) => ['E', 'C', 'D'].includes(c));
+            } else if (typeof sale.status_codes === 'string') {
+              try {
+                const parsed = JSON.parse(sale.status_codes);
+                if (Array.isArray(parsed)) {
+                  statusCodes = parsed
+                    .map((c: any) => String(c).toUpperCase().trim())
+                    .filter((c: string) => ['E', 'C', 'D'].includes(c));
+                }
+              } catch {
+                // Se não for JSON, tratar cada caractere
+                statusCodes = sale.status_codes
+                  .split('')
+                  .map((c: string) => c.toUpperCase().trim())
+                  .filter((c: string) => ['E', 'C', 'D'].includes(c));
+              }
+            }
+          }
+          
+          // Debug: log apenas se houver status codes
+          if (statusCodes.length > 0) {
+            console.log(`Venda #${sale.sale_number} - Status codes:`, statusCodes);
+          }
+          
+          return {
+            ...sale,
+            status_codes: statusCodes
+          };
+        });
+      }
+
+      setSales(salesRes.data || []);
+      setTotalCount(salesRes.count || 0);
+      setCustomers(customersRes.data || []);
+      // Carregar produtos e serviços (sem filtro de quantidade para serviços)
+      setProducts(productsRes.data || []);
+    } catch (error) {
+      toast({ title: 'Erro', description: 'Erro ao carregar dados', variant: 'destructive' });
+    } finally { setLoading(false); }
+  };
+
+  const loadCustomerData = async (customerId: string) => {
+    if (!customerId) {
+      setSelectedCustomerData(null);
+      setCustomerVehicles([]);
+      return;
+    }
+    try {
+      // Carregar dados do cliente
+      const { data: customerData, error: customerError } = await supabase
+        .from('customers')
+        .select('*')
+        .eq('id', customerId)
+        .single();
+
+      if (!customerError && customerData) {
+        setSelectedCustomerData(customerData);
+      }
+
+      // Carregar veículos do cliente
+      const { data: vehiclesData, error: vehiclesError } = await supabase
+        .from('customer_vehicles')
+        .select('*')
+        .eq('customer_id', customerId)
+        .order('plate');
+
+      if (!vehiclesError && vehiclesData) {
+        setCustomerVehicles(vehiclesData);
+      }
+    } catch (error) {
+      console.error('Erro ao carregar dados do cliente:', error);
+    }
+  };
+
+  const loadCustomerVehicles = async (customerId: string) => {
+    if (!customerId) {
+      setCustomerVehicles([]);
+      return;
+    }
+    try {
+      const { data, error } = await supabase
+        .from('customer_vehicles')
+        .select('*')
+        .eq('customer_id', customerId)
+        .order('plate');
+      if (!error && data) {
+        setCustomerVehicles(data);
+      }
+    } catch (error) {
+      console.error('Erro ao carregar veículos:', error);
+    }
+  };
+
+  const loadSaleItems = async (saleId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('sale_items')
+        .select('*, product:products(*)')
+        .eq('sale_id', saleId);
+
+      if (!error && data) {
+        const items = data.map(item => ({
+          product_id: item.product_id,
+          product: item.product,
+          quantity: item.quantity,
+          unit_price: parseFloat(item.unit_price.toString()),
+          discount: parseFloat(item.discount?.toString() || '0'),
+          preco_original: item.preco_original ? parseFloat(item.preco_original.toString()) : parseFloat(item.unit_price.toString()),
+          preco_final: item.preco_final ? parseFloat(item.preco_final.toString()) : parseFloat(item.unit_price.toString()),
+          desconto_percentual: item.desconto_percentual ? parseFloat(item.desconto_percentual.toString()) : 0,
+          status_preco: item.status_preco || 'OK',
+          sale_type: formData.sale_type
+        }));
+        setSaleItems(items);
+      }
+    } catch (error) {
+      console.error('Erro ao carregar itens da venda:', error);
+    }
+  };
+
+  const handleOpenDialog = async (sale?: any) => {
+    if (sale) {
+      setSelectedSale(sale);
+      setFormData({ customer_id: sale.customer_id || '', vehicle_id: sale.vehicle_id || '', payment_method: sale.payment_method || 'cash', payment_status: sale.payment_status, discount: sale.discount, notes: sale.notes || '', sale_type: sale.sale_type || 'retail', tipo_operacao: sale.tipo_operacao || 'auto' });
+      if (sale.customer_id) {
+        loadCustomerData(sale.customer_id);
+      }
+      if (sale.id) {
+        await loadSaleItems(sale.id);
+      }
+      setCurrentStep(1);
+    } else {
+      setSelectedSale(null);
+      setFormData({ customer_id: '', vehicle_id: '', payment_method: 'cash', payment_status: 'pending', discount: 0, notes: '', sale_type: 'retail', tipo_operacao: 'auto' });
+      setSaleItems([]);
+      setCustomerVehicles([]);
+      setSelectedCustomerData(null);
+      setCurrentStep(1);
+    }
+    setIsDialogOpen(true);
+  };
+
+  const handleNextStep = () => {
+    if (currentStep === 1) {
+      if (!formData.customer_id) {
+        toast({ title: 'Atenção', description: 'Selecione um cliente para continuar', variant: 'destructive' });
+        return;
+      }
+      setCurrentStep(2);
+    } else if (currentStep === 2) {
+      if (saleItems.length === 0) {
+        toast({ title: 'Atenção', description: 'Adicione pelo menos um item para continuar', variant: 'destructive' });
+        return;
+      }
+      // Se tipo_operacao for 'auto', determinar automaticamente
+      if (formData.tipo_operacao === 'auto') {
+        const tipoAuto = determineTipoOperacao();
+        setFormData({ ...formData, tipo_operacao: tipoAuto });
+      }
+      setCurrentStep(3);
+    }
+  };
+
+  const handlePreviousStep = () => {
+    if (currentStep === 2) {
+      setCurrentStep(1);
+    } else if (currentStep === 3) {
+      setCurrentStep(2);
+    }
+  };
+
+  const addProduct = (productId: string) => {
+    const product = products.find(p => p.id === productId);
+    if (!product) return;
+
+    // Verificar se é produto e tem estoque (serviços não precisam de estoque)
+    if (product.tipo_item === 'produto') {
+      const availableStock = product.quantity || 0;
+
+      if (availableStock <= 0) {
+        toast({
+          title: 'Atenção',
+          description: 'Produto sem estoque disponível',
+          variant: 'destructive'
+        });
+        return;
+      }
+
+      // Verificar quantidade já adicionada na venda
+      const existing = saleItems.find(i => i.product_id === productId);
+      const currentQuantityInSale = existing ? existing.quantity : 0;
+
+      // Verificar se ao adicionar mais 1, não excede o estoque
+      if (currentQuantityInSale + 1 > availableStock) {
+        toast({
+          title: 'Estoque Insuficiente',
+          description: `Estoque disponível: ${availableStock}. Você já tem ${currentQuantityInSale} unidade(s) na venda.`,
+          variant: 'destructive'
+        });
+        return;
+      }
+    }
+
+    // Usar preço baseado no tipo de venda (retail ou wholesale)
+    const price = formData.sale_type === 'wholesale'
+      ? (product.wholesale_price || product.sale_price || 0)
+      : (product.retail_price || product.sale_price || 0);
+
+    const existing = saleItems.find(i => i.product_id === productId);
+    if (existing) {
+      setSaleItems(saleItems.map(i => i.product_id === productId ? { ...i, quantity: i.quantity + 1 } : i));
+    } else {
+      // Validar preço ao adicionar item
+      const minimumPrice = product.minimum_price || null;
+      const validation = validateItemPrice(
+        price,
+        price,
+        minimumPrice,
+        priceControlSettings?.desconto_maximo_vendedor || 100,
+        priceControlSettings
+      );
+
+      setSaleItems([...saleItems, {
+        product_id: productId,
+        product,
+        quantity: 1,
+        unit_price: price,
+        preco_original: price,
+        preco_final: price,
+        discount: 0,
+        desconto_percentual: 0,
+        status_preco: validation.status,
+        sale_type: formData.sale_type
+      }]);
+    }
+  };
+
+  // Determinar tipo de operação automaticamente
+  const determineTipoOperacao = (): 'produto' | 'servico' | 'misto' => {
+    if (saleItems.length === 0) return 'produto';
+
+    const produtos = saleItems.filter(item => item.product?.tipo_item === 'produto');
+    const servicos = saleItems.filter(item => item.product?.tipo_item === 'servico');
+
+    if (produtos.length > 0 && servicos.length > 0) return 'misto';
+    if (servicos.length > 0) return 'servico';
+    return 'produto';
+  };
+
+  // Obter itens separados por tipo
+  const getItemsByType = () => {
+    return {
+      produtos: saleItems.filter(item => item.product?.tipo_item === 'produto'),
+      servicos: saleItems.filter(item => item.product?.tipo_item === 'servico')
+    };
+  };
+
+  // Função para atualizar preços quando mudar o tipo de venda
+  const updateSaleType = (saleType: 'retail' | 'wholesale') => {
+    setFormData({ ...formData, sale_type: saleType });
+
+    // Atualizar preços dos itens já adicionados
+    setSaleItems(saleItems.map(item => {
+      const product = item.product || products.find(p => p.id === item.product_id);
+      if (!product) return item;
+
+      const newPrice = saleType === 'wholesale'
+        ? (product.wholesale_price || product.sale_price || item.unit_price)
+        : (product.retail_price || product.sale_price || item.unit_price);
+
+      return { ...item, unit_price: newPrice, sale_type: saleType };
+    }));
+  };
+
+  const removeProduct = (productId: string) => setSaleItems(saleItems.filter(i => i.product_id !== productId));
+
+  // Função para editar preço/desconto de um item
+  const handleEditItemPrice = (productId: string) => {
+    const item = saleItems.find(i => i.product_id === productId);
+    if (!item) return;
+
+    setEditingItemPrice(productId);
+    setItemPriceEdit({
+      price: item.unit_price || item.preco_original || 0,
+      discount: item.discount || 0
+    });
+  };
+
+  // Função para salvar alteração de preço/desconto
+  const handleSaveItemPrice = (productId: string) => {
+    const item = saleItems.find(i => i.product_id === productId);
+    if (!item) return;
+
+    const originalPrice = item.preco_original || item.unit_price || 0;
+    const newPrice = itemPriceEdit.price;
+    const discount = itemPriceEdit.discount;
+    const finalPrice = newPrice - discount;
+
+    // Validar preço
+    const minimumPrice = item.product?.minimum_price || null;
+    const validation = validateItemPrice(
+      originalPrice,
+      finalPrice,
+      minimumPrice,
+      priceControlSettings?.desconto_maximo_vendedor || 100,
+      priceControlSettings
+    );
+
+    // Atualizar item
+    const updatedItems = saleItems.map(i => {
+      if (i.product_id === productId) {
+        return {
+          ...i,
+          unit_price: newPrice,
+          preco_original: originalPrice,
+          preco_final: finalPrice,
+          discount: discount,
+          desconto_percentual: validation.discountPercent,
+          status_preco: validation.status,
+        };
+      }
+      return i;
+    });
+
+    setSaleItems(updatedItems);
+    setEditingItemPrice(null);
+
+    if (validation.needsApproval) {
+      toast({
+        title: 'Atenção',
+        description: validation.message || 'Este item requer aprovação',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  // Função para cancelar edição de preço
+  const handleCancelEditPrice = () => {
+    setEditingItemPrice(null);
+    setItemPriceEdit({ price: 0, discount: 0 });
+  };
+
+  const updateItemQuantity = async (productId: string, qty: number) => {
+    const item = saleItems.find(i => i.product_id === productId);
+    if (!item) return;
+
+    // Validar quantidade mínima
+    const newQty = Math.max(1, qty);
+
+    // Verificar se é produto (com tratamento seguro para ausência de tipo_item)
+    let isProduct = false;
+    if (item.product?.tipo_item === 'produto') {
+      isProduct = true;
+    } else if (!item.product?.tipo_item) {
+      // Se tipo_item não está disponível, verificar no banco
+      const { data: productInfo, error: infoError } = await supabase
+        .from('products')
+        .select('tipo_item')
+        .eq('id', productId)
+        .single();
+      
+      if (infoError && infoError.code === '42703') {
+        // Coluna não existe, assumir que é produto
+        isProduct = true;
+      } else if (!infoError && productInfo) {
+        isProduct = productInfo.tipo_item === 'produto';
+      } else {
+        // Por padrão, assumir que é produto
+        isProduct = true;
+      }
+    }
+
+    // Se for produto, validar estoque disponível
+    if (isProduct) {
+      // Buscar estoque atual do banco de dados (sempre atualizado)
+      const { data: currentProduct, error: productError } = await supabase
+        .from('products')
+        .select('quantity')
+        .eq('id', productId)
+        .single();
+
+      if (productError) {
+        console.error('Erro ao buscar produto:', productError);
+        toast({
+          title: 'Erro',
+          description: 'Erro ao verificar estoque. Tente novamente.',
+          variant: 'destructive'
+        });
+        return;
+      }
+
+      const currentStock = currentProduct?.quantity || 0;
+
+      if (selectedSale) {
+        // Em edição: buscar quantidade antiga deste produto na venda
+        const { data: oldItem } = await supabase
+          .from('sale_items')
+          .select('quantity')
+          .eq('sale_id', selectedSale.id)
+          .eq('product_id', productId)
+          .single();
+
+        const oldQuantity = oldItem?.quantity || 0;
+        // Estoque efetivo = estoque atual + quantidade que será devolvida
+        const effectiveStock = currentStock + oldQuantity;
+
+        if (newQty > effectiveStock) {
+          toast({
+            title: 'Estoque Insuficiente',
+            description: `Estoque disponível: ${effectiveStock} (considerando devolução de ${oldQuantity} unidade(s) da venda atual). Não é possível vender ${newQty} unidade(s).`,
+            variant: 'destructive'
+          });
+          return;
+        }
+      } else {
+        // Para nova venda, validar contra estoque disponível
+        if (newQty > currentStock) {
+          toast({
+            title: 'Estoque Insuficiente',
+            description: `Estoque disponível: ${currentStock}. Não é possível vender ${newQty} unidade(s).`,
+            variant: 'destructive'
+          });
+          return;
+        }
+      }
+    }
+
+    setSaleItems(saleItems.map(i => i.product_id === productId ? { ...i, quantity: newQty } : i));
+  };
+  const calculateSubtotal = () => saleItems.reduce((sum, i) => sum + (i.unit_price * i.quantity - i.discount), 0);
+  const calculateTotal = () => calculateSubtotal() - formData.discount;
+
+  const handleSave = async () => {
+    if (saleItems.length === 0) { toast({ title: 'Erro', description: 'Adicione pelo menos um item', variant: 'destructive' }); return; }
+
+    // Determinar tipo de operação se for auto
+    let tipoOperacao = formData.tipo_operacao;
+    if (tipoOperacao === 'auto') {
+      tipoOperacao = determineTipoOperacao();
+    }
+
+    // Mostrar diálogo de confirmação antes de salvar
+    setShowConfirmDialog(true);
+  };
+
+  const confirmSave = async () => {
+    setIsSaving(true);
+    setShowConfirmDialog(false);
+
+    try {
+      // Validar estoque antes de salvar (apenas para produtos)
+      for (const item of saleItems) {
+        if (item.product?.tipo_item === 'produto') {
+          // Buscar estoque atual do banco de dados
+          const { data: currentProduct, error: productError } = await supabase
+            .from('products')
+            .select('quantity, name')
+            .eq('id', item.product_id)
+            .single();
+
+          if (productError) {
+            throw new Error(`Erro ao verificar estoque do produto: ${productError.message}`);
+          }
+
+          const availableStock = currentProduct?.quantity || 0;
+
+          // Se estiver editando, considerar que o estoque antigo será devolvido
+          if (selectedSale) {
+            // Buscar quantidade antiga deste produto na venda
+            const { data: oldItems } = await supabase
+              .from('sale_items')
+              .select('quantity')
+              .eq('sale_id', selectedSale.id)
+              .eq('product_id', item.product_id)
+              .single();
+
+            const oldQuantity = oldItems?.quantity || 0;
+            const effectiveStock = availableStock + oldQuantity; // Estoque + quantidade que será devolvida
+
+            if (item.quantity > effectiveStock) {
+              throw new Error(`Estoque insuficiente para ${currentProduct?.name || 'produto'}. Estoque disponível: ${effectiveStock}, quantidade solicitada: ${item.quantity}`);
+            }
+          } else {
+            // Para nova venda, validar contra estoque disponível
+            if (item.quantity > availableStock) {
+              throw new Error(`Estoque insuficiente para ${currentProduct?.name || 'produto'}. Estoque disponível: ${availableStock}, quantidade solicitada: ${item.quantity}`);
+            }
+          }
+        }
+      }
+
+      // Determinar tipo de operação se for auto
+      let tipoOperacao = formData.tipo_operacao;
+      if (tipoOperacao === 'auto') {
+        tipoOperacao = determineTipoOperacao();
+      }
+
+      // Determinar status codes antes de salvar
+      const statusCodes: string[] = [];
+      
+      // Status E - Estoque: se houver produtos que precisam de separação
+      if (requiresStockSeparation(saleItems)) {
+        statusCodes.push('E');
+      }
+      
+      // Status C - Crédito: se o método de pagamento exige aprovação (boleto ou credito loja sempre adicionam C)
+      if (requiresCreditApproval(formData.payment_method)) {
+        statusCodes.push('C');
+        
+        // Validar limite de crédito antes de permitir a venda
+        const saleTotal = calculateTotal();
+        const customerCreditLimit = selectedCustomerData?.credit_limit || 0;
+        
+        // Validar limite de crédito (excluir venda atual se for edição)
+        const creditCheck = await canCustomerMakeCreditSale(
+          formData.customer_id,
+          customerCreditLimit,
+          saleTotal,
+          selectedSale?.id // Excluir venda atual do cálculo se for edição
+        );
+        
+        if (!creditCheck.allowed) {
+          throw new Error(creditCheck.reason || 'Limite de crédito excedido');
+        }
+      }
+      
+      // Status D - Desconto: se o desconto exceder o limite
+      const subtotal = calculateSubtotal();
+      const maxDiscountPercent = priceControlSettings?.desconto_maximo_vendedor || 100;
+      if (requiresDiscountApproval(formData.discount, subtotal, maxDiscountPercent)) {
+        statusCodes.push('D');
+      }
+
+      // Criar objeto de dados sem tipo_operacao primeiro (para evitar erro de cache do PostgREST)
+      // Usar company?.id que já tem o override aplicado, ou fallback para profile?.company_id
+      const saleDataWithoutTipoOperacao: any = {
+        customer_id: formData.customer_id || null,
+        vehicle_id: formData.vehicle_id || null,
+        seller_id: user?.id || null,
+        company_id: company?.id || profile?.company_id || null,
+        subtotal: calculateSubtotal(),
+        discount: formData.discount,
+        total: calculateTotal(),
+        payment_method: formData.payment_method,
+        payment_status: formData.payment_status as 'pending' | 'paid' | 'overdue' | 'cancelled',
+        sale_type: formData.sale_type,
+        notes: formData.notes || null,
+        status_codes: statusCodes.length > 0 ? statusCodes : [] // Salvar status codes diretamente
+      };
+
+      if (selectedSale) {
+        // 1. Buscar itens antigos da venda para reverter estoque
+        const { data: oldSaleItems, error: oldItemsError } = await supabase
+          .from('sale_items')
+          .select(`
+            *,
+            product:products!sale_items_product_id_fkey(id, quantity)
+          `)
+          .eq('sale_id', selectedSale.id);
+
+        if (oldItemsError) throw oldItemsError;
+
+        // 2. Validar estoque antes de fazer alterações
+        for (const newItem of saleItems) {
+          // Verificar se é produto - buscar tipo_item separadamente se necessário
+          let isProduct = false;
+          if (newItem.product_id) {
+            const { data: productInfo, error: productInfoError } = await supabase
+              .from('products')
+              .select('tipo_item')
+              .eq('id', newItem.product_id)
+              .single();
+            
+            if (productInfoError && productInfoError.code === '42703') {
+              // Coluna tipo_item não existe, assumir que é produto
+              isProduct = true;
+            } else if (!productInfoError && productInfo) {
+              isProduct = productInfo.tipo_item === 'produto';
+            } else {
+              // Se não conseguir determinar, assumir que é produto por padrão
+              isProduct = true;
+            }
+          }
+
+          if (isProduct) {
+            // Buscar produto atualizado do banco
+            const { data: currentProduct, error: productError } = await supabase
+              .from('products')
+              .select('quantity')
+              .eq('id', newItem.product_id)
+              .single();
+
+            if (productError) throw productError;
+
+            // Calcular estoque disponível considerando itens antigos que serão revertidos
+            const oldItem = oldSaleItems?.find(oi => oi.product_id === newItem.product_id);
+            const oldQuantity = oldItem && oldItem.product?.tipo_item === 'produto' ? oldItem.quantity : 0;
+            const availableStock = (currentProduct?.quantity || 0) + oldQuantity; // Estoque atual + quantidade que será devolvida
+
+            // Verificar se a nova quantidade não excede o estoque disponível
+            if (newItem.quantity > availableStock) {
+              throw new Error(`Estoque insuficiente para ${newItem.product?.name || 'produto'}. Estoque disponível: ${availableStock}, quantidade solicitada: ${newItem.quantity}`);
+            }
+          }
+        }
+
+        // 3. Reverter estoque dos itens antigos (devolver ao estoque)
+        if (oldSaleItems && oldSaleItems.length > 0) {
+          for (const oldItem of oldSaleItems) {
+            if (oldItem.product?.tipo_item === 'produto' && oldItem.product_id) {
+              // Buscar estoque atual
+              const { data: currentProduct, error: productError } = await supabase
+                .from('products')
+                .select('quantity')
+                .eq('id', oldItem.product_id)
+                .single();
+
+              if (productError) throw productError;
+
+              const currentQuantity = currentProduct?.quantity || 0;
+              const newQuantity = currentQuantity + oldItem.quantity;
+
+              // Devolver ao estoque
+              const { error: revertError } = await supabase
+                .from('products')
+                .update({ quantity: newQuantity })
+                .eq('id', oldItem.product_id);
+
+              if (revertError) throw revertError;
+
+              // Criar movimentação de estoque (entrada - devolução)
+              const { error: movementError } = await supabase.rpc('create_inventory_movement', {
+                p_company_id: company?.id || profile?.company_id || null,
+                p_product_id: oldItem.product_id,
+                p_type: 'entrada_devolucao_cliente',
+                p_quantity: oldItem.quantity,
+                p_reason: `Edição de Venda #${selectedSale.sale_number} - Devolução de itens antigos`,
+                p_reference_id: selectedSale.id,
+                p_reference_type: 'sale',
+                p_user_id: user?.id || null
+              });
+
+              if (movementError) {
+                console.error('❌ Erro ao criar movimento de estoque (devolução):', movementError);
+                // Não lançar erro aqui, apenas logar
+              }
+            }
+          }
+        }
+
+        // 4. Deletar itens antigos
+        const { error: deleteItemsError } = await supabase
+          .from('sale_items')
+          .delete()
+          .eq('sale_id', selectedSale.id);
+
+        if (deleteItemsError) throw deleteItemsError;
+
+        // 5. Determinar status codes para a venda atualizada
+        const statusCodes: string[] = [];
+        
+        // Status E - Estoque: se houver produtos que precisam de separação
+        if (requiresStockSeparation(saleItems)) {
+          statusCodes.push('E');
+        }
+        
+        // Status C - Crédito: se o método de pagamento exige aprovação (boleto ou credito loja sempre adicionam C)
+        if (requiresCreditApproval(formData.payment_method)) {
+          statusCodes.push('C');
+          
+          // Validar limite de crédito antes de permitir a venda
+          const saleTotal = calculateTotal();
+          const customerCreditLimit = selectedCustomerData?.credit_limit || 0;
+          
+          // Validar limite de crédito (excluir venda atual do cálculo)
+          const creditCheck = await canCustomerMakeCreditSale(
+            formData.customer_id,
+            customerCreditLimit,
+            saleTotal,
+            selectedSale.id // Excluir venda atual do cálculo
+          );
+          
+          if (!creditCheck.allowed) {
+            throw new Error(creditCheck.reason || 'Limite de crédito excedido');
+          }
+        }
+        
+        // Status D - Desconto: se o desconto exceder o limite
+        const subtotal = calculateSubtotal();
+        const maxDiscountPercent = priceControlSettings?.desconto_maximo_vendedor || 100;
+        if (requiresDiscountApproval(formData.discount, subtotal, maxDiscountPercent)) {
+          statusCodes.push('D');
+        }
+        
+        // Atualizar dados da venda incluindo status_codes
+        const saleDataWithStatus = {
+          ...saleDataWithoutTipoOperacao,
+          status_codes: statusCodes.length > 0 ? statusCodes : []
+        };
+        
+        const { error } = await supabase.from('sales').update(saleDataWithStatus).eq('id', selectedSale.id);
+        if (error) throw error;
+
+        // Nota: tipo_operacao não existe na tabela sales, então não tentamos atualizar
+
+        // 6. Validar preços e determinar status da venda
+        let saleStatus: 'normal' | 'pendente_aprovacao' | 'liberada' = 'normal';
+        let needsApproval = false;
+
+        for (const item of saleItems) {
+          const originalPrice = item.preco_original || item.unit_price || 0;
+          const finalPrice = (item.preco_final || item.unit_price || 0) - (item.discount || 0);
+          const minimumPrice = item.product?.minimum_price || null;
+
+          const validation = validateItemPrice(
+            originalPrice,
+            finalPrice,
+            minimumPrice,
+            priceControlSettings?.desconto_maximo_vendedor || 100,
+            priceControlSettings
+          );
+
+          if (validation.needsApproval) {
+            needsApproval = true;
+            break;
+          }
+        }
+
+        if (needsApproval) {
+          saleStatus = 'pendente_aprovacao';
+        }
+
+        // Atualizar status da venda se necessário
+        if (saleStatus !== 'normal') {
+          const { error: statusError } = await supabase
+            .from('sales')
+            .update({
+              status_venda: saleStatus,
+              solicitado_por: user?.id || null
+            })
+            .eq('id', selectedSale.id);
+
+          if (statusError) console.error('Erro ao atualizar status da venda:', statusError);
+        }
+
+        // 7. Inserir novos itens
+        const itemsToInsert = saleItems.map(i => {
+          const originalPrice = i.preco_original || i.unit_price || 0;
+          const finalPrice = (i.preco_final || i.unit_price || 0) - (i.discount || 0);
+          const minimumPrice = i.product?.minimum_price || null;
+
+          const validation = validateItemPrice(
+            originalPrice,
+            finalPrice,
+            minimumPrice,
+            priceControlSettings?.desconto_maximo_vendedor || 100,
+            priceControlSettings
+          );
+
+          return {
+            sale_id: selectedSale.id,
+            product_id: i.product_id,
+            quantity: i.quantity,
+            unit_price: i.unit_price,
+            discount: i.discount || 0,
+            total: i.unit_price * i.quantity - (i.discount || 0)
+          };
+        });
+
+        const { error: itemsError } = await supabase.from('sale_items').insert(itemsToInsert);
+        if (itemsError) throw itemsError;
+
+        // 7. Aplicar estoque dos novos itens (reservar estoque)
+        for (const item of saleItems) {
+          if (item.product?.tipo_item === 'produto' && item.product_id) {
+            // Buscar estoque atual do banco de dados para garantir consistência
+            const { data: currentProduct, error: productError } = await supabase
+              .from('products')
+              .select('quantity')
+              .eq('id', item.product_id)
+              .single();
+
+            if (productError) {
+              console.error('❌ Erro ao buscar estoque do produto:', productError);
+              throw new Error(`Erro ao verificar estoque do produto: ${productError.message}`);
+            }
+
+            const currentQuantity = currentProduct?.quantity || 0;
+            const newQuantity = currentQuantity - item.quantity;
+
+            // Verificar se há estoque suficiente
+            if (newQuantity < 0) {
+              throw new Error(`Estoque insuficiente para ${item.product?.name || 'produto'}. Estoque disponível: ${currentQuantity}, quantidade solicitada: ${item.quantity}`);
+            }
+
+            // Atualizar estoque (reservar)
+            const { error: updateError } = await supabase
+              .from('products')
+              .update({ quantity: newQuantity })
+              .eq('id', item.product_id);
+
+            if (updateError) {
+              console.error('❌ Erro ao atualizar estoque:', updateError);
+              throw new Error(`Erro ao reservar estoque: ${updateError.message}`);
+            }
+
+            // Criar movimentação de estoque (saída - reserva)
+            const { error: movementError } = await supabase.rpc('create_inventory_movement', {
+              p_company_id: company?.id || profile?.company_id || null,
+              p_product_id: item.product_id,
+              p_type: 'saida_venda',
+              p_quantity: item.quantity,
+              p_reason: `Edição de Venda #${selectedSale.sale_number} - Reserva de estoque`,
+              p_reference_id: selectedSale.id,
+              p_reference_type: 'sale',
+              p_user_id: user?.id || null
+            });
+
+            if (movementError) {
+              console.error('❌ Erro ao criar movimento de estoque:', movementError);
+              // Não lançar erro aqui, apenas logar
+            }
+          }
+        }
+
+        // Atualizar status para aguardando_separacao se for normal e houver produtos
+        // Verificar se há produtos na venda (não apenas serviços)
+        const hasProducts = saleItems.some(item => {
+          // Se o item tem product_id e não é serviço, é produto
+          if (item.product_id) {
+            // Se tem product.tipo_item, verificar se é produto
+            if (item.product?.tipo_item) {
+              return item.product.tipo_item === 'produto';
+            }
+            // Se não tem tipo_item definido, assumir que é produto (padrão)
+            return true;
+          }
+          return false;
+        });
+
+        if (saleStatus === 'normal' && hasProducts) {
+          const { error: statusUpdateError } = await supabase
+            .from('sales')
+            .update({ status_venda: 'aguardando_separacao' })
+            .eq('id', selectedSale.id);
+
+          if (statusUpdateError) {
+            console.error('❌ Erro ao atualizar status para aguardando_separacao:', statusUpdateError);
+            console.error('Detalhes do erro:', JSON.stringify(statusUpdateError, null, 2));
+          } else {
+            console.log('✅ Status atualizado para aguardando_separacao');
+          }
+        } else if (saleStatus === 'normal' && !hasProducts) {
+          // Se não há produtos (apenas serviços), manter status normal
+          console.log('ℹ️ Venda sem produtos, mantendo status normal');
+        }
+
+
+        toast({ title: 'Sucesso', description: 'Venda atualizada e estoque ajustado' });
+      } else {
+        console.log('🔵 Inserindo venda:', saleDataWithoutTipoOperacao);
+        // Inserir sem tipo_operacao primeiro (usará o valor padrão 'auto')
+        const { data: newSale, error: saleError } = await supabase.from('sales').insert([saleDataWithoutTipoOperacao]).select().single();
+        if (saleError) {
+          console.error('❌ Erro ao inserir venda:', saleError);
+          throw saleError;
+        }
+        if (!newSale || !newSale.id) {
+          console.error('❌ Venda não foi criada corretamente');
+          throw new Error('Venda não foi criada. Verifique os dados e tente novamente.');
+        }
+        console.log('✅ Venda criada:', newSale.id);
+
+        // Nota: tipo_operacao não existe na tabela sales, então não tentamos atualizar
+
+        // Validar preços e determinar status da venda
+        let saleStatus: 'normal' | 'pendente_aprovacao' | 'liberada' = 'normal';
+        let needsApproval = false;
+
+        for (const item of saleItems) {
+          const originalPrice = item.preco_original || item.unit_price || 0;
+          const finalPrice = (item.preco_final || item.unit_price || 0) - (item.discount || 0);
+          const minimumPrice = item.product?.minimum_price || null;
+
+          const validation = validateItemPrice(
+            originalPrice,
+            finalPrice,
+            minimumPrice,
+            priceControlSettings?.desconto_maximo_vendedor || 100,
+            priceControlSettings
+          );
+
+          if (validation.needsApproval) {
+            needsApproval = true;
+            break;
+          }
+        }
+
+        if (needsApproval) {
+          saleStatus = 'pendente_aprovacao';
+        }
+
+        // Atualizar status da venda
+        if (saleStatus !== 'normal') {
+          const { error: statusError } = await supabase
+            .from('sales')
+            .update({
+              status_venda: saleStatus,
+              solicitado_por: user?.id || null
+            })
+            .eq('id', newSale.id);
+
+          if (statusError) console.error('Erro ao atualizar status da venda:', statusError);
+        }
+
+        const itemsToInsert = saleItems.map(i => {
+          const originalPrice = i.preco_original || i.unit_price || 0;
+          const finalPrice = (i.preco_final || i.unit_price || 0) - (i.discount || 0);
+          const minimumPrice = i.product?.minimum_price || null;
+
+          const validation = validateItemPrice(
+            originalPrice,
+            finalPrice,
+            minimumPrice,
+            priceControlSettings?.desconto_maximo_vendedor || 100,
+            priceControlSettings
+          );
+
+          return {
+            sale_id: newSale.id,
+            product_id: i.product_id,
+            quantity: i.quantity,
+            unit_price: i.unit_price,
+            discount: i.discount || 0,
+            total: i.unit_price * i.quantity - (i.discount || 0)
+          };
+        });
+        console.log('🔵 Inserindo itens da venda:', itemsToInsert.length);
+        const { error: itemsError } = await supabase.from('sale_items').insert(itemsToInsert);
+        if (itemsError) {
+          console.error('❌ Erro ao inserir itens da venda:', itemsError);
+          throw itemsError;
+        }
+        console.log('✅ Itens da venda inseridos');
+
+        // Reservar estoque imediatamente ao criar a venda (apenas para produtos, não serviços)
+        for (const item of saleItems) {
+          if (item.product?.tipo_item === 'produto' && item.product_id) {
+            // Buscar estoque atual do banco de dados para garantir consistência
+            const { data: currentProduct, error: productError } = await supabase
+              .from('products')
+              .select('quantity')
+              .eq('id', item.product_id)
+              .single();
+
+            if (productError) {
+              console.error('❌ Erro ao buscar estoque do produto:', productError);
+              throw new Error(`Erro ao verificar estoque do produto: ${productError.message}`);
+            }
+
+            const currentQuantity = currentProduct?.quantity || 0;
+            const newQuantity = currentQuantity - item.quantity;
+
+            // Verificar se há estoque suficiente
+            if (newQuantity < 0) {
+              throw new Error(`Estoque insuficiente para ${item.product?.name || 'produto'}. Estoque disponível: ${currentQuantity}, quantidade solicitada: ${item.quantity}`);
+            }
+
+            // Atualizar estoque (reservar)
+            const { error: updateError } = await supabase
+              .from('products')
+              .update({ quantity: newQuantity })
+              .eq('id', item.product_id);
+
+            if (updateError) {
+              console.error('❌ Erro ao atualizar estoque:', updateError);
+              throw new Error(`Erro ao reservar estoque: ${updateError.message}`);
+            }
+
+            // Criar movimentação de estoque (saída - reserva)
+            console.log('🔄 Criando movimentação de estoque para venda:', {
+              company_id: company?.id || profile?.company_id,
+              product_id: item.product_id,
+              type: 'saida_venda',
+              quantity: item.quantity,
+              sale_id: newSale.id,
+            });
+            
+            const { data: movementData, error: movementError } = await supabase.rpc('create_inventory_movement', {
+              p_company_id: company?.id || profile?.company_id || null,
+              p_product_id: item.product_id,
+              p_type: 'saida_venda',
+              p_quantity: item.quantity,
+              p_reason: `Venda #${newSale.sale_number} - Reserva de estoque`,
+              p_reference_id: newSale.id,
+              p_reference_type: 'sale',
+              p_user_id: user?.id || null
+            });
+
+            if (movementError) {
+              console.error('❌ Erro ao criar movimento de estoque:', movementError);
+              console.error('❌ Detalhes do erro:', JSON.stringify(movementError, null, 2));
+              // Não lançar erro aqui, apenas logar, pois não é crítico
+            } else {
+              console.log('✅ Movimentação de estoque criada com sucesso:', movementData);
+              
+              // Verificar se a movimentação foi realmente criada
+              const { data: verifyMovement, error: verifyError } = await supabase
+                .from('inventory_movements')
+                .select('id, product_id, type, quantity, created_at')
+                .eq('id', movementData)
+                .single();
+              
+              if (verifyError) {
+                console.error('⚠️ Movimentação criada mas não encontrada na verificação:', verifyError);
+              } else {
+                console.log('✅ Movimentação verificada no banco:', verifyMovement);
+              }
+            }
+          }
+        }
+
+        // Atualizar status para aguardando_separacao se for normal e houver produtos
+        // Verificar se há produtos na venda (não apenas serviços)
+        const hasProducts = saleItems.some(item => {
+          // Se o item tem product_id e não é serviço, é produto
+          if (item.product_id) {
+            // Se tem product.tipo_item, verificar se é produto
+            if (item.product?.tipo_item) {
+              return item.product.tipo_item === 'produto';
+            }
+            // Se não tem tipo_item definido, assumir que é produto (padrão)
+            return true;
+          }
+          return false;
+        });
+
+        if (saleStatus === 'normal' && hasProducts) {
+          const { error: statusUpdateError } = await supabase
+            .from('sales')
+            .update({ status_venda: 'aguardando_separacao' })
+            .eq('id', newSale.id);
+
+          if (statusUpdateError) {
+            console.error('❌ Erro ao atualizar status para aguardando_separacao:', statusUpdateError);
+            console.error('Detalhes do erro:', JSON.stringify(statusUpdateError, null, 2));
+            // Tentar criar registro na tabela picking diretamente como fallback
+            try {
+              const { error: pickingError } = await supabase
+                .from('picking')
+                .insert([{
+                  sale_id: newSale.id,
+                  company_id: company?.id || profile?.company_id,
+                  status: 'em_separacao',
+                  user_id: user?.id
+                }]);
+
+              if (pickingError) {
+                console.error('❌ Erro ao criar registro de picking:', pickingError);
+              } else {
+                console.log('✅ Registro de picking criado como fallback');
+              }
+            } catch (pickingErr) {
+              console.error('❌ Erro ao tentar criar picking:', pickingErr);
+            }
+          } else {
+            console.log('✅ Status atualizado para aguardando_separacao');
+          }
+        } else if (saleStatus === 'normal' && !hasProducts) {
+          // Se não há produtos (apenas serviços), manter status normal
+          console.log('ℹ️ Venda sem produtos, mantendo status normal');
+        }
+
+
+        // Verificar se a venda realmente foi salva
+        const { data: verifySale, error: verifyError } = await supabase
+          .from('sales')
+          .select('*')
+          .eq('id', newSale.id)
+          .single();
+
+        if (verifyError || !verifySale) {
+          console.error('❌ Erro ao verificar venda salva:', verifyError);
+          throw new Error('Venda foi criada mas não foi encontrada. Por favor, recarregue a página.');
+        }
+
+        console.log('✅ Venda verificada e salva com sucesso');
+
+        // ============================================
+        // ATUALIZAR STATUS DE PENDÊNCIAS (se necessário, pois já foram salvos diretamente)
+        // ============================================
+        // Os status já foram salvos diretamente no campo status_codes
+        // Mas vamos tentar usar as funções RPC como backup
+        try {
+          if (statusCodes.length > 0) {
+            console.log('✅ Status codes salvos diretamente:', statusCodes);
+            // Tentar sincronizar com funções RPC (opcional)
+            for (const code of statusCodes) {
+              try {
+                await addSaleStatus(newSale.id, code as 'E' | 'C' | 'D');
+              } catch (rpcError) {
+                // Ignorar erro, pois os status já foram salvos diretamente
+                console.warn(`Aviso: Não foi possível adicionar status ${code} via RPC (já foi salvo diretamente)`);
+              }
+            }
+          }
+        } catch (statusError) {
+          console.error('❌ Erro ao sincronizar status de pendências:', statusError);
+          // Não bloquear o salvamento se houver erro ao sincronizar status
+        }
+
+        toast({ title: 'Sucesso', description: 'Venda registrada' });
+      }
+      
+      // Os status já foram salvos diretamente no campo status_codes
+      // Não precisamos fazer nada adicional aqui
+
+      setIsDialogOpen(false);
+      loadData();
+    } catch (error: any) {
+      console.error('❌ ERRO ao salvar venda:', error);
+      console.error('📊 Código:', error.code);
+      console.error('📝 Mensagem:', error.message);
+      console.error('🔍 Detalhes:', error.details);
+      console.error('💡 Hint:', error.hint);
+
+      let errorMessage = error.message || 'Erro ao salvar venda';
+      if (error.code === 'PGRST116') {
+        errorMessage = 'Nenhuma linha foi afetada. Verifique se você tem permissão para salvar.';
+      } else if (error.code === '42501') {
+        errorMessage = 'Você não tem permissão para realizar esta operação.';
+      } else if (error.details) {
+        errorMessage += ` - ${error.details}`;
+      }
+
+      toast({
+        title: 'Erro ao Salvar',
+        description: errorMessage,
+        variant: 'destructive',
+        duration: 5000
+      });
+    } finally { setIsSaving(false); }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Tem certeza que deseja cancelar esta venda? Os produtos serão devolvidos ao estoque.')) return;
+
+    try {
+      // 1. Buscar os itens da venda antes de deletar
+      const { data: saleItems, error: itemsError } = await supabase
+        .from('sale_items')
+        .select(`
+          *,
+          product:products!sale_items_product_id_fkey(id, quantity)
+        `)
+        .eq('sale_id', id);
+
+      if (itemsError) throw itemsError;
+
+      // 2. Reverter o estoque de cada produto (apenas produtos, não serviços)
+      if (saleItems && saleItems.length > 0) {
+        for (const item of saleItems) {
+          if (item.product_id && item.product) {
+            // Buscar informações completas do produto para verificar se é produto ou serviço
+            // Tentar buscar tipo_item, mas se a coluna não existir, buscar apenas quantity
+            let productData: any = null;
+            const { data: dataWithTipoItem, error: tipoItemError } = await supabase
+              .from('products')
+              .select('quantity, tipo_item')
+              .eq('id', item.product_id)
+              .single();
+
+            if (tipoItemError && tipoItemError.code === '42703') {
+              // Coluna tipo_item não existe, buscar apenas quantity e assumir que é produto
+              const { data: dataWithoutTipoItem, error: quantityError } = await supabase
+                .from('products')
+                .select('quantity')
+                .eq('id', item.product_id)
+                .single();
+              
+              if (quantityError) {
+                console.error(`Erro ao buscar produto ${item.product_id}:`, quantityError);
+                continue;
+              }
+              productData = { ...dataWithoutTipoItem, tipo_item: 'produto' };
+            } else if (tipoItemError) {
+              console.error(`Erro ao buscar produto ${item.product_id}:`, tipoItemError);
+              continue;
+            } else {
+              productData = dataWithTipoItem;
+            }
+
+            // Apenas devolver ao estoque se for produto (não serviço)
+            // Se tipo_item não existir, assumir que é produto (padrão)
+            const isProduct = productData?.tipo_item === 'produto' || !productData?.tipo_item;
+            if (isProduct) {
+              const currentQuantity = productData.quantity || 0;
+              const newQuantity = currentQuantity + item.quantity;
+
+              // Atualizar quantidade do produto
+              const { error: updateError } = await supabase
+                .from('products')
+                .update({ quantity: newQuantity })
+                .eq('id', item.product_id);
+
+              if (updateError) {
+                console.error(`Erro ao reverter estoque do produto ${item.product_id}:`, updateError);
+                throw updateError;
+              }
+
+              // Criar movimentação de estoque (entrada - devolução por cancelamento)
+              console.log('🔄 Criando movimentação de devolução para cancelamento:', {
+                company_id: company?.id || profile?.company_id,
+                product_id: item.product_id,
+                type: 'entrada_devolucao_cliente',
+                quantity: item.quantity,
+                sale_id: id,
+              });
+              
+              const { data: movementData, error: movementError } = await supabase.rpc('create_inventory_movement', {
+                p_company_id: company?.id || profile?.company_id || null,
+                p_product_id: item.product_id,
+                p_type: 'entrada_devolucao_cliente',
+                p_quantity: item.quantity,
+                p_reason: `Cancelamento de Venda - Devolução ao estoque`,
+                p_reference_id: id,
+                p_reference_type: 'sale',
+                p_user_id: user?.id || null
+              });
+              
+              if (movementError) {
+                console.error('❌ Erro ao criar movimento de estoque (cancelamento):', movementError);
+                console.error('❌ Detalhes do erro:', JSON.stringify(movementError, null, 2));
+              } else {
+                console.log('✅ Movimentação de devolução criada com sucesso:', movementData);
+              }
+
+              if (movementError) {
+                console.error(`Erro ao criar movimento de estoque:`, movementError);
+                // Não lançar erro aqui, apenas logar
+              }
+            }
+          }
+        }
+      }
+
+      // 3. Deletar a venda (os itens serão deletados automaticamente por CASCADE)
+      const { error } = await supabase.from('sales').delete().eq('id', id);
+
+      if (error) throw error;
+
+      toast({
+        title: 'Sucesso',
+        description: 'Venda cancelada e produtos devolvidos ao estoque'
+      });
+
+      loadData();
+    } catch (error: any) {
+      console.error('Erro ao cancelar venda:', error);
+      toast({
+        title: 'Erro',
+        description: error.message || 'Erro ao cancelar venda',
+        variant: 'destructive'
+      });
+    }
+  };
+
+  const filteredSales = sales.filter(s => {
+    const matchesSearch = s.sale_number?.toString().includes(search) || s.customer?.name?.toLowerCase().includes(search.toLowerCase());
+    let matchesStatus = true;
+    if (filterStatus !== 'all') {
+      if (filterStatus === 'pending') {
+        matchesStatus = s.payment_status === 'pending';
+      } else if (filterStatus === 'paid') {
+        matchesStatus = s.payment_status === 'paid';
+      } else {
+        // Filtro por status_venda
+        matchesStatus = s.status_venda === filterStatus;
+      }
+    }
+    return matchesSearch && matchesStatus;
+  });
+
+  const handleOpenApprovalDialog = (sale: any) => {
+    setSaleToApprove(sale);
+    setApprovalDialogOpen(true);
+  };
+
+  const handleApprovalComplete = () => {
+    loadData();
+    setApprovalDialogOpen(false);
+    setSaleToApprove(null);
+  };
+
+  const columns = [
+    { key: 'sale_number', header: 'Venda #', cell: (item: any) => <span className="font-mono font-semibold">#{item.sale_number}</span> },
+    { key: 'customer', header: 'Cliente', cell: (item: any) => item.customer?.name || 'Consumidor Final' },
+    {
+      key: 'status_venda', header: 'Status', cell: (item: any) => {
+        // Garantir que status_codes seja um array
+        let statusCodes: string[] = [];
+        if (item.status_codes) {
+          if (Array.isArray(item.status_codes)) {
+            statusCodes = item.status_codes;
+          } else if (typeof item.status_codes === 'string') {
+            // Se for string, tentar parsear como JSON ou tratar como array de caracteres
+            try {
+              statusCodes = JSON.parse(item.status_codes);
+            } catch {
+              // Se não for JSON, tratar cada caractere como um código
+              statusCodes = item.status_codes.split('').filter((c: string) => ['E', 'C', 'D'].includes(c));
+            }
+          }
+        }
+        
+        // Verificar se há pendências de separação ou conferência pelo status_venda
+        // NOTA: 'separado' não deve adicionar código E, pois a separação já foi concluída
+        const hasSeparationOrConferencePending = [
+          'aguardando_separacao',
+          'em_separacao',
+          'conferencia_pendente'
+        ].includes(item.status_venda);
+        
+        // Se houver status de separação/conferência pendente, adicionar código E se não existir
+        if (hasSeparationOrConferencePending && !statusCodes.includes('E')) {
+          statusCodes = [...statusCodes, 'E'];
+        }
+        
+        const hasPendencies = statusCodes.length > 0;
+        
+        return (
+          <div className="flex flex-col gap-1">
+            {/* Status de aprovação de preço */}
+            {item.status_venda === 'pendente_aprovacao' && (
+              <span className="px-2 py-1 bg-yellow-100 text-yellow-700 rounded text-xs font-medium">Pendente Aprovação</span>
+            )}
+            {item.status_venda === 'liberada' && (
+              <span className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-medium">Liberada</span>
+            )}
+            {item.status_venda === 'aguardando_ajuste' && (
+              <span className="px-2 py-1 bg-orange-100 text-orange-700 rounded text-xs font-medium">Aguardando Ajuste</span>
+            )}
+            
+            {/* Status de pendências (E, C, D) */}
+            {hasPendencies ? (
+              <div className="flex flex-wrap gap-1">
+                {statusCodes.map((code: string, index: number) => {
+                  const codeUpper = code.toUpperCase().trim();
+                  if (['E', 'C', 'D'].includes(codeUpper)) {
+                    return (
+                      <span
+                        key={`${codeUpper}-${index}`}
+                        className={`px-2 py-0.5 rounded text-xs font-medium ${getStatusColor(codeUpper as 'E' | 'C' | 'D')}`}
+                        title={getStatusDescription(codeUpper as 'E' | 'C' | 'D')}
+                      >
+                        {codeUpper}
+                      </span>
+                    );
+                  }
+                  return null;
+                })}
+              </div>
+            ) : (
+              <span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">Sem pendências</span>
+            )}
+          </div>
+        );
+      }
+    },
+    { key: 'payment_status', header: 'Pagamento', cell: (item: any) => { const status = getPaymentStatus(item.payment_status); return <StatusBadge status={status.type} label={status.label} />; } },
+    { key: 'total', header: 'Total', cell: (item: any) => <span className="font-semibold">{formatCurrency(item.total)}</span> },
+    { key: 'created_at', header: 'Data', cell: (item: any) => formatDate(item.created_at) },
+    {
+      key: 'actions', header: '', className: 'w-32', cell: (item: any) => (
+        <div className="flex gap-1">
+          {item.status_venda === 'pendente_aprovacao' && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-yellow-600 hover:text-yellow-700 hover:bg-yellow-50"
+              onClick={() => handleOpenApprovalDialog(item)}
+              title="Aprovar/Reprovar Venda"
+            >
+              <Shield className="h-4 w-4" />
+            </Button>
+          )}
+          {item.status_venda === 'aguardando_ajuste' && item.picking_issues && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-orange-600 hover:text-orange-700 hover:bg-orange-50"
+              onClick={() => {
+                setSaleWithIssues(item);
+                setPickingIssuesDialogOpen(true);
+              }}
+              title="Ajustar Problemas de Separação"
+            >
+              <AlertTriangle className="h-4 w-4" />
+            </Button>
+          )}
+          <Button variant="ghost" size="icon" onClick={() => handleOpenDialog(item)}><Edit className="h-4 w-4" /></Button>
+          <Button variant="ghost" size="icon" className="text-destructive" onClick={() => handleDelete(item.id)}><Trash2 className="h-4 w-4" /></Button>
+        </div>
+      )
+    },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <PageHeader title="Vendas" description="Registre e gerencie suas vendas" action={{ label: 'Nova Venda', onClick: () => handleOpenDialog(), icon: ShoppingCart }} />
+      <div className="flex flex-col sm:flex-row gap-4">
+        <SearchInput value={search} onChange={setSearch} placeholder="Buscar por número ou cliente..." className="w-full sm:max-w-md" />
+        <Select value={filterStatus} onValueChange={setFilterStatus}>
+          <SelectTrigger className="w-full sm:w-48">
+            <SelectValue placeholder="Status" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Todos</SelectItem>
+            <SelectItem value="pending">Pagamento Pendente</SelectItem>
+            <SelectItem value="paid">Pago</SelectItem>
+            <SelectItem value="aguardando_ajuste">Aguardando Ajuste</SelectItem>
+            <SelectItem value="aguardando_separacao">Aguardando Separação</SelectItem>
+            <SelectItem value="em_separacao">Em Separação</SelectItem>
+            <SelectItem value="separado">Separado</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <DataTable columns={columns} data={filteredSales} loading={loading} emptyMessage="Nenhuma venda encontrada" />
+
+      {/* Paginação */}
+      <div className="flex items-center justify-between border-t pt-4">
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-muted-foreground">Itens por página:</span>
+          <Select
+            value={pageSize.toString()}
+            onValueChange={(v) => {
+              setPageSize(Number(v));
+              setCurrentPage(1); // Voltar para primeira página ao mudar tamanho
+            }}
+          >
+            <SelectTrigger className="w-[80px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="5">5</SelectItem>
+              <SelectItem value="20">20</SelectItem>
+              <SelectItem value="50">50</SelectItem>
+              <SelectItem value="100">100</SelectItem>
+              <SelectItem value="5000">5000</SelectItem>
+            </SelectContent>
+          </Select>
+          <span className="text-sm text-muted-foreground ml-2">
+            Total: {totalCount} vendas
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+            disabled={currentPage === 1 || loading}
+          >
+            <ChevronLeft className="h-4 w-4 mr-1" />
+            Anterior
+          </Button>
+          <span className="text-sm font-medium">
+            Página {currentPage} de {Math.ceil(totalCount / pageSize) || 1}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCurrentPage(p => Math.min(Math.ceil(totalCount / pageSize), p + 1))}
+            disabled={currentPage >= Math.ceil(totalCount / pageSize) || loading}
+          >
+            Próximo
+            <ChevronRight className="h-4 w-4 ml-1" />
+          </Button>
+        </div>
+      </div>
+
+      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+        <DialogContent className="max-w-4xl max-h-[95vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-semibold">
+              {selectedSale ? `Editar Venda #${selectedSale.sale_number}` : 'Nova Venda'}
+            </DialogTitle>
+            <DialogDescription>Registre uma nova venda</DialogDescription>
+          </DialogHeader>
+
+          {/* Indicador de Passos */}
+          {!selectedSale && (
+            <div className="flex items-center justify-center gap-2 py-4 border-b">
+              <div className={`flex items-center gap-2 ${currentStep >= 1 ? 'text-primary' : 'text-muted-foreground'}`}>
+                <div className={`flex items-center justify-center w-8 h-8 rounded-full border-2 ${currentStep >= 1 ? 'border-primary bg-primary text-primary-foreground' : 'border-muted-foreground'}`}>
+                  {currentStep > 1 ? <User className="h-4 w-4" /> : <span>1</span>}
+                </div>
+                <span className="text-sm font-medium">Cliente</span>
+              </div>
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              <div className={`flex items-center gap-2 ${currentStep >= 2 ? 'text-primary' : 'text-muted-foreground'}`}>
+                <div className={`flex items-center justify-center w-8 h-8 rounded-full border-2 ${currentStep >= 2 ? 'border-primary bg-primary text-primary-foreground' : 'border-muted-foreground'}`}>
+                  {currentStep > 2 ? <Package className="h-4 w-4" /> : currentStep === 2 ? <Package className="h-4 w-4" /> : <span>2</span>}
+                </div>
+                <span className="text-sm font-medium">Itens</span>
+              </div>
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              <div className={`flex items-center gap-2 ${currentStep >= 3 ? 'text-primary' : 'text-muted-foreground'}`}>
+                <div className={`flex items-center justify-center w-8 h-8 rounded-full border-2 ${currentStep >= 3 ? 'border-primary bg-primary text-primary-foreground' : 'border-muted-foreground'}`}>
+                  {currentStep === 3 ? <CreditCard className="h-4 w-4" /> : <span>3</span>}
+                </div>
+                <span className="text-sm font-medium">Pagamento</span>
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-5 py-4">
+            {/* PASSO 1: Informações do Cliente */}
+            {(currentStep === 1 || selectedSale) && (
+              <>
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="text-lg font-semibold mb-4">Informações do Cliente</h3>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="customer" className="text-sm font-medium">Cliente *</Label>
+                      <Combobox
+                        items={[
+                          { value: "", label: "Consumidor Final" },
+                          ...customers.map(c => ({ value: c.id, label: c.name }))
+                        ]}
+                        value={formData.customer_id}
+                        onChange={(v) => {
+                          setFormData({ ...formData, customer_id: v, vehicle_id: '' });
+                          loadCustomerData(v);
+                        }}
+                        placeholder="Digite o nome do cliente..."
+                        searchPlaceholder="Buscar cliente..."
+                        emptyMessage="Cliente não encontrado."
+                        modal
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="seller" className="text-sm font-medium">Vendedor</Label>
+                      <Input
+                        id="seller"
+                        value={profile?.full_name || 'Usuário'}
+                        disabled
+                        className="bg-muted cursor-not-allowed"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="sale_type" className="text-sm font-medium">Tipo de Venda</Label>
+                      <Select
+                        value={formData.sale_type}
+                        onValueChange={(v) => updateSaleType(v as 'retail' | 'wholesale')}
+                      >
+                        <SelectTrigger id="sale_type">
+                          <SelectValue placeholder="Selecione o tipo..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="retail">Varejo</SelectItem>
+                          <SelectItem value="wholesale">Atacado</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="tipo_operacao" className="text-sm font-medium">Tipo de Operação</Label>
+                      <Select
+                        value={formData.tipo_operacao}
+                        onValueChange={(v) => setFormData({ ...formData, tipo_operacao: v as 'auto' | 'produto' | 'servico' | 'misto' })}
+                      >
+                        <SelectTrigger id="tipo_operacao">
+                          <SelectValue placeholder="Selecione o tipo..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="auto">Automático (Sistema decide)</SelectItem>
+                          <SelectItem value="produto">Apenas Produtos (NFe)</SelectItem>
+                          <SelectItem value="servico">Apenas Serviços (NFS-e)</SelectItem>
+                          <SelectItem value="misto">Misto (NFe + NFS-e)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">
+                        {formData.tipo_operacao === 'auto' && 'O sistema determinará automaticamente baseado nos itens adicionados'}
+                        {formData.tipo_operacao === 'produto' && 'Será gerada apenas nota fiscal de produtos (NFe)'}
+                        {formData.tipo_operacao === 'servico' && 'Será gerada apenas nota fiscal de serviços (NFS-e)'}
+                        {formData.tipo_operacao === 'misto' && 'Serão geradas duas notas: uma NFe e uma NFS-e'}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Informações do Cliente Selecionado */}
+                  {selectedCustomerData && (
+                    <div className="mt-4 p-4 bg-muted/30 rounded-lg border space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-sm font-semibold text-foreground">Informações do Cliente</h4>
+                        {selectedCustomerData.code && (
+                          <span className="text-xs text-muted-foreground">Cód: {selectedCustomerData.code}</span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        {selectedCustomerData.phone && (
+                          <div className="flex items-center gap-2">
+                            <Phone className="h-4 w-4 text-muted-foreground" />
+                            <span className="text-muted-foreground">Telefone:</span>
+                            <span className="font-medium">{selectedCustomerData.phone}</span>
+                          </div>
+                        )}
+                        {selectedCustomerData.email && (
+                          <div className="flex items-center gap-2">
+                            <Mail className="h-4 w-4 text-muted-foreground" />
+                            <span className="text-muted-foreground">Email:</span>
+                            <span className="font-medium">{selectedCustomerData.email}</span>
+                          </div>
+                        )}
+                        {selectedCustomerData.cpf_cnpj && (
+                          <div className="flex items-center gap-2">
+                            <FileText className="h-4 w-4 text-muted-foreground" />
+                            <span className="text-muted-foreground">CPF/CNPJ:</span>
+                            <span className="font-medium">{selectedCustomerData.cpf_cnpj}</span>
+                          </div>
+                        )}
+                        {(selectedCustomerData.address || selectedCustomerData.city || selectedCustomerData.state) && (
+                          <div className="flex items-start gap-2 col-span-2">
+                            <MapPin className="h-4 w-4 text-muted-foreground mt-0.5" />
+                            <div className="flex-1">
+                              <span className="text-muted-foreground">Endereço: </span>
+                              <span className="font-medium">
+                                {[
+                                  selectedCustomerData.address,
+                                  selectedCustomerData.city,
+                                  selectedCustomerData.state
+                                ].filter(Boolean).join(', ')}
+                                {selectedCustomerData.zip_code && ` - ${selectedCustomerData.zip_code}`}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Veículo - Sugestão */}
+                  {formData.customer_id && customerVehicles.length > 0 && (
+                    <div className="space-y-2">
+                      <Label htmlFor="vehicle" className="text-sm font-medium">Veículo</Label>
+                      <Select
+                        value={formData.vehicle_id || 'none'}
+                        onValueChange={(v) => setFormData({ ...formData, vehicle_id: v === 'none' ? '' : v })}
+                      >
+                        <SelectTrigger id="vehicle">
+                          <SelectValue placeholder="Selecione um veículo do cliente" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">Não informar veículo</SelectItem>
+                          {customerVehicles.map(vehicle => (
+                            <SelectItem key={vehicle.id} value={vehicle.id}>
+                              {vehicle.plate} - {vehicle.brand} {vehicle.model} {vehicle.year && `(${vehicle.year})`}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">
+                        Veículo vinculado ao cliente (sugestão)
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
+            {/* PASSO 2: Inserir Itens */}
+            {(currentStep === 2 || selectedSale) && (
+              <>
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="text-lg font-semibold mb-4">Inserir Itens</h3>
+                  </div>
+
+                  {/* Busca e Lista de Produtos */}
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-sm font-medium">Produtos e Serviços</Label>
+                        <div className="flex gap-2">
+                          <Button
+                            variant={itemFilter === 'all' ? 'default' : 'outline'}
+                            size="sm"
+                            onClick={() => setItemFilter('all')}
+                          >
+                            Todos
+                          </Button>
+                          <Button
+                            variant={itemFilter === 'produto' ? 'default' : 'outline'}
+                            size="sm"
+                            onClick={() => setItemFilter('produto')}
+                          >
+                            Produtos
+                          </Button>
+                          <Button
+                            variant={itemFilter === 'servico' ? 'default' : 'outline'}
+                            size="sm"
+                            onClick={() => setItemFilter('servico')}
+                          >
+                            Serviços
+                          </Button>
+                        </div>
+                      </div>
+                      <Popover open={productSearchOpen} onOpenChange={setProductSearchOpen}>
+                        <PopoverTrigger asChild>
+                          <Button
+                            variant="outline"
+                            role="combobox"
+                            aria-expanded={productSearchOpen}
+                            className="w-full justify-start"
+                          >
+                            <Search className="mr-2 h-4 w-4 shrink-0 opacity-50" />
+                            <span className="truncate text-muted-foreground">
+                              Buscar produto por código ou nome...
+                            </span>
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-[500px] p-0" align="start">
+                          <Command shouldFilter={false}>
+                            <CommandInput
+                              placeholder="Digite o código ou nome do produto..."
+                              value={productSearchInput}
+                              onValueChange={setProductSearchInput}
+                            />
+                            <CommandList>
+                              <CommandEmpty>Produto não encontrado.</CommandEmpty>
+                              <CommandGroup>
+                                {products
+                                  .filter((product) => {
+                                    // Filtro por tipo
+                                    if (itemFilter !== 'all' && product.tipo_item !== itemFilter) return false;
+
+                                    // Filtro por estoque (apenas para produtos)
+                                    if (product.tipo_item === 'produto' && itemFilter !== 'servico' && (product.quantity || 0) <= 0) {
+                                      // Mostrar produtos sem estoque apenas se estiver buscando especificamente
+                                      if (!productSearchInput.trim()) return false;
+                                    }
+
+                                    // Filtro de busca
+                                    if (!productSearchInput.trim()) return true;
+                                    const search = productSearchInput.toLowerCase().trim();
+                                    const code = String(product.internal_code || '').toLowerCase();
+                                    const name = String(product.name || '').toLowerCase();
+                                    const description = String(product.description || '').toLowerCase();
+                                    const brand = String(product.brand || '').toLowerCase();
+
+                                    // Buscar em código, nome, descrição e marca
+                                    return code.includes(search) ||
+                                      name.includes(search) ||
+                                      description.includes(search) ||
+                                      brand.includes(search);
+                                  })
+                                  .slice(0, 50)
+                                  .map((product) => {
+                                    // Criar string pesquisável para display
+                                    const searchableText = `${product.internal_code || ''} ${product.name || ''}`.trim();
+                                    return (
+                                      <CommandItem
+                                        key={product.id}
+                                        value={searchableText}
+                                        onSelect={() => {
+                                          addProduct(product.id);
+                                          setProductSearchInput('');
+                                          setProductSearchOpen(false);
+                                        }}
+                                        className="cursor-pointer"
+                                      >
+                                        <div className="flex items-start justify-between w-full py-2">
+                                          <div className="flex-1 min-w-0">
+                                            <div className="flex items-center gap-2 mb-1">
+                                              <span className="font-mono text-xs font-semibold text-muted-foreground">
+                                                #{product.internal_code}
+                                              </span>
+                                              <span className="font-medium text-sm">{product.name}</span>
+                                              <span className={`text-xs px-2 py-0.5 rounded-full ${product.tipo_item === 'produto'
+                                                ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200'
+                                                : 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-200'
+                                                }`}>
+                                                {product.tipo_item === 'produto' ? 'Produto' : 'Serviço'}
+                                              </span>
+                                            </div>
+
+                                            <div className="space-y-1">
+                                              {product.brand && (
+                                                <div className="flex items-center gap-2">
+                                                  <span className="text-xs text-muted-foreground">Marca:</span>
+                                                  <span className="text-xs font-medium">{product.brand}</span>
+                                                </div>
+                                              )}
+
+                                              {product.type && (
+                                                <div className="flex items-center gap-2">
+                                                  <span className="text-xs text-muted-foreground">Tipo:</span>
+                                                  <span className="text-xs font-medium">
+                                                    {product.type === 'windshield' ? 'Para-brisa' :
+                                                      product.type === 'side_glass' ? 'Vidro Lateral' :
+                                                        product.type === 'rear_glass' ? 'Vidro Traseiro' :
+                                                          product.type === 'rubber' ? 'Borracha' :
+                                                            product.type === 'sensor' ? 'Sensor' :
+                                                              product.type === 'accessory' ? 'Acessório' : product.type}
+                                                  </span>
+                                                </div>
+                                              )}
+
+                                              {product.compatible_vehicles && (
+                                                <div className="flex items-start gap-2">
+                                                  <span className="text-xs text-muted-foreground">Veículos:</span>
+                                                  <span className="text-xs font-medium truncate">{product.compatible_vehicles}</span>
+                                                </div>
+                                              )}
+
+                                              {(product.has_sensor || product.has_hud || product.has_band) && (
+                                                <div className="flex items-center gap-2 flex-wrap">
+                                                  {product.has_sensor && (
+                                                    <span className="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">
+                                                      Sensor{product.sensor_count > 0 ? ` (${product.sensor_count})` : ''}
+                                                    </span>
+                                                  )}
+                                                  {product.has_hud && (
+                                                    <span className="text-xs px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded">
+                                                      HUD
+                                                    </span>
+                                                  )}
+                                                  {product.has_band && (
+                                                    <span className="text-xs px-1.5 py-0.5 bg-green-100 text-green-700 rounded">
+                                                      Faixa
+                                                    </span>
+                                                  )}
+                                                </div>
+                                              )}
+                                            </div>
+
+                                            <div className="flex items-center gap-3 mt-2 pt-2 border-t">
+                                              <div className="flex flex-col">
+                                                <span className="text-xs text-muted-foreground">Preço Varejo:</span>
+                                                <span className="text-sm font-semibold text-primary">
+                                                  {formatCurrency(product.retail_price || product.sale_price || 0)}
+                                                </span>
+                                              </div>
+                                              {product.wholesale_price && product.wholesale_price > 0 && (
+                                                <div className="flex flex-col">
+                                                  <span className="text-xs text-muted-foreground">Preço Atacado:</span>
+                                                  <span className="text-sm font-semibold text-green-600">
+                                                    {formatCurrency(product.wholesale_price)}
+                                                  </span>
+                                                </div>
+                                              )}
+                                              {product.tipo_item === 'produto' && (
+                                                <div className="flex flex-col ml-auto">
+                                                  <span className="text-xs text-muted-foreground">Estoque:</span>
+                                                  <span className={`text-xs font-semibold ${product.quantity > 0 ? 'text-green-600' : 'text-destructive'}`}>
+                                                    {product.quantity}
+                                                  </span>
+                                                </div>
+                                              )}
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </CommandItem>
+                                    );
+                                  })}
+                              </CommandGroup>
+                            </CommandList>
+                          </Command>
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+
+                    {saleItems.length === 0 ? (
+                      <div className="text-center py-12 border-2 border-dashed rounded-xl bg-muted/20">
+                        <Package className="h-12 w-12 mx-auto text-muted-foreground/50 mb-3" />
+                        <p className="text-sm font-medium text-muted-foreground">Nenhum produto adicionado</p>
+                        <p className="text-xs text-muted-foreground/70 mt-1">Adicione produtos usando a busca acima</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-3 border rounded-xl overflow-hidden bg-card shadow-sm">
+                        {/* Cabeçalho da Tabela */}
+                        <div className="grid grid-cols-12 gap-4 px-6 py-4 bg-gradient-to-r from-primary/5 via-primary/3 to-transparent border-b border-border/50">
+                          <div className="col-span-5">
+                            <span className="text-xs font-bold uppercase tracking-wider text-foreground/80">PRODUTO</span>
+                          </div>
+                          <div className="col-span-2 text-center">
+                            <span className="text-xs font-bold uppercase tracking-wider text-foreground/80">QUANTIDADE</span>
+                          </div>
+                          <div className="col-span-2 text-right">
+                            <span className="text-xs font-bold uppercase tracking-wider text-foreground/80">PREÇO UNIT.</span>
+                          </div>
+                          <div className="col-span-2 text-right">
+                            <span className="text-xs font-bold uppercase tracking-wider text-foreground/80">SUBTOTAL</span>
+                          </div>
+                          <div className="col-span-1"></div>
+                        </div>
+                        
+                        {/* Lista de Produtos */}
+                        <div className="divide-y divide-border/50">
+                          {saleItems.map((item, index) => (
+                            <div 
+                              key={item.product_id} 
+                              className="px-6 py-4 hover:bg-muted/40 transition-all duration-200 group"
+                            >
+                              <div className="grid grid-cols-12 gap-4 items-start">
+                                {/* Coluna Produto */}
+                                <div className="col-span-5 flex flex-col gap-2">
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="flex-1">
+                                      <p className="font-semibold text-base text-foreground leading-tight mb-1.5">
+                                        {item.product?.name || 'Produto'}
+                                      </p>
+                                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                                        <span className="inline-flex items-center gap-1">
+                                          <span className="font-medium">Cód:</span>
+                                          <span className="font-mono font-semibold text-foreground/90 bg-muted px-1.5 py-0.5 rounded">
+                                            {item.product?.internal_code || 'N/A'}
+                                          </span>
+                                        </span>
+                                        {item.product?.brand && (
+                                          <>
+                                            <span className="text-muted-foreground/40">•</span>
+                                            <span className="inline-flex items-center gap-1">
+                                              <span>Marca:</span>
+                                              <span className="font-semibold text-foreground/80">{item.product.brand}</span>
+                                            </span>
+                                          </>
+                                        )}
+                                        {item.product?.type && (
+                                          <>
+                                            <span className="text-muted-foreground/40">•</span>
+                                            <span className="inline-flex items-center gap-1">
+                                              <span className="capitalize">
+                                                {item.product.type === 'windshield' ? 'Para-brisa' :
+                                                  item.product.type === 'side_glass' ? 'Vidro Lateral' :
+                                                    item.product.type === 'rear_glass' ? 'Vidro Traseiro' :
+                                                      item.product.type === 'rubber' ? 'Borracha' :
+                                                        item.product.type === 'sensor' ? 'Sensor' :
+                                                          item.product.type === 'accessory' ? 'Acessório' : item.product.type}
+                                              </span>
+                                            </span>
+                                          </>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  
+                                  {/* Badges de características */}
+                                  {(item.product?.has_sensor || item.product?.has_hud || item.product?.has_band) && (
+                                    <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                                      {item.product.has_sensor && (
+                                        <span className="text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-md font-medium shadow-sm">
+                                          Sensor{item.product.sensor_count > 0 ? ` (${item.product.sensor_count})` : ''}
+                                        </span>
+                                      )}
+                                      {item.product.has_hud && (
+                                        <span className="text-xs px-2 py-1 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 rounded-md font-medium shadow-sm">
+                                          HUD
+                                        </span>
+                                      )}
+                                      {item.product.has_band && (
+                                        <span className="text-xs px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 rounded-md font-medium shadow-sm">
+                                          Faixa
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+                                  
+                                  {/* Descrição */}
+                                  {item.product?.description && (
+                                    <p className="text-xs text-muted-foreground/80 line-clamp-1 mt-0.5">
+                                      {item.product.description}
+                                    </p>
+                                  )}
+                                </div>
+                                
+                                {/* Coluna Quantidade */}
+                                <div className="col-span-2 flex items-center justify-center">
+                                  <div className="flex items-center gap-2 bg-muted/50 rounded-lg p-1 border border-border/50">
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-8 w-8 hover:bg-background hover:text-primary transition-colors"
+                                      onClick={() => updateItemQuantity(item.product_id, item.quantity - 1)}
+                                    >
+                                      <span className="text-lg font-semibold">−</span>
+                                    </Button>
+                                    <span className="w-12 text-center font-bold text-base text-foreground">
+                                      {item.quantity}
+                                    </span>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-8 w-8 hover:bg-background hover:text-primary transition-colors"
+                                      onClick={() => updateItemQuantity(item.product_id, item.quantity + 1)}
+                                    >
+                                      <span className="text-lg font-semibold">+</span>
+                                    </Button>
+                                  </div>
+                                </div>
+                                
+                                {/* Coluna Preço Unitário */}
+                                <div className="col-span-2 text-right">
+                                  {editingItemPrice === item.product_id ? (
+                                    <div className="flex flex-col gap-2 items-end">
+                                      <Input
+                                        type="number"
+                                        step="0.01"
+                                        min="0"
+                                        value={itemPriceEdit.price}
+                                        onChange={(e) => setItemPriceEdit({ ...itemPriceEdit, price: parseFloat(e.target.value) || 0 })}
+                                        className="h-9 text-sm w-28 font-medium"
+                                        placeholder="Preço"
+                                      />
+                                      <Input
+                                        type="number"
+                                        step="0.01"
+                                        min="0"
+                                        value={itemPriceEdit.discount}
+                                        onChange={(e) => setItemPriceEdit({ ...itemPriceEdit, discount: parseFloat(e.target.value) || 0 })}
+                                        placeholder="Desconto"
+                                        className="h-8 text-xs w-28"
+                                      />
+                                      <div className="flex gap-1.5 mt-1">
+                                        <Button
+                                          size="sm"
+                                          variant="default"
+                                          className="h-7 px-3 text-xs"
+                                          onClick={() => handleSaveItemPrice(item.product_id)}
+                                        >
+                                          <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
+                                          Salvar
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="h-7 px-3 text-xs"
+                                          onClick={handleCancelEditPrice}
+                                        >
+                                          <X className="h-3.5 w-3.5" />
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="flex flex-col items-end gap-1">
+                                      <div className="flex items-center gap-2 group/edit">
+                                        <span className="font-bold text-base text-foreground">
+                                          {formatCurrency(item.unit_price)}
+                                        </span>
+                                        <Button
+                                          size="icon"
+                                          variant="ghost"
+                                          className="h-6 w-6 opacity-0 group-hover/edit:opacity-100 transition-opacity hover:bg-primary/10 hover:text-primary"
+                                          onClick={() => handleEditItemPrice(item.product_id)}
+                                        >
+                                          <Edit className="h-3.5 w-3.5" />
+                                        </Button>
+                                      </div>
+                                      
+                                      {item.discount > 0 && (
+                                        <span className="text-xs font-medium text-destructive bg-destructive/10 px-2 py-0.5 rounded">
+                                          Desc: -{formatCurrency(item.discount)}
+                                        </span>
+                                      )}
+                                      
+                                      {item.status_preco && item.status_preco !== 'OK' && (
+                                        <div className="flex items-center gap-1 mt-1">
+                                          {item.status_preco === 'DESCONTO_EXCEDIDO' && (
+                                            <span className="text-xs px-2 py-1 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 rounded-md flex items-center gap-1 font-medium">
+                                              <AlertTriangle className="h-3 w-3" />
+                                              Desc. Excedido
+                                            </span>
+                                          )}
+                                          {item.status_preco === 'ABAIXO_DO_MINIMO' && (
+                                            <span className="text-xs px-2 py-1 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded-md flex items-center gap-1 font-medium">
+                                              <AlertTriangle className="h-3 w-3" />
+                                              Abaixo Mínimo
+                                            </span>
+                                          )}
+                                        </div>
+                                      )}
+                                      
+                                      {item.product?.quantity !== undefined && (
+                                        <span className={`text-xs font-medium px-2 py-0.5 rounded ${
+                                          item.product.quantity > 0 
+                                            ? 'text-muted-foreground bg-muted/50' 
+                                            : 'text-destructive bg-destructive/10'
+                                        }`}>
+                                          Estoque: {item.product.quantity}
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                                
+                                {/* Coluna Subtotal */}
+                                <div className="col-span-2 text-right flex items-center justify-end">
+                                  <div className="flex flex-col items-end">
+                                    <span className="font-bold text-lg text-primary">
+                                      {formatCurrency((item.unit_price * item.quantity) - (item.discount || 0))}
+                                    </span>
+                                    {item.quantity > 1 && (
+                                      <span className="text-xs text-muted-foreground mt-0.5">
+                                        {item.quantity} × {formatCurrency(item.unit_price)}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                                
+                                {/* Coluna Ações */}
+                                <div className="col-span-1 flex items-center justify-center">
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors opacity-0 group-hover:opacity-100"
+                                    onClick={() => removeProduct(item.product_id)}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Resumo Rápido */}
+                    {saleItems.length > 0 && (
+                      <div className="mt-6 pt-4 border-t border-border/50">
+                        <div className="flex justify-between items-center bg-gradient-to-r from-primary/5 to-transparent rounded-lg px-6 py-4 border border-primary/10">
+                          <div className="flex flex-col">
+                            <span className="text-sm font-semibold text-foreground/80 uppercase tracking-wide">
+                              Total Parcial
+                            </span>
+                            <span className="text-xs text-muted-foreground mt-0.5">
+                              {saleItems.length} {saleItems.length === 1 ? 'item' : 'itens'}
+                            </span>
+                          </div>
+                          <div className="flex flex-col items-end">
+                            <span className="text-2xl font-bold text-primary">
+                              {formatCurrency(calculateSubtotal())}
+                            </span>
+                            {formData.discount > 0 && (
+                              <span className="text-xs text-muted-foreground mt-1">
+                                Desconto: -{formatCurrency(formData.discount)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* PASSO 3: Pagamento */}
+            {(currentStep === 3 || selectedSale) && (
+              <>
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="text-lg font-semibold mb-4">Pagamento e Finalização</h3>
+                  </div>
+
+                  {/* Método de Pagamento e Desconto */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="payment_method" className="text-sm font-medium">Método de Pagamento *</Label>
+                      <Select
+                        value={formData.payment_method}
+                        onValueChange={(v) => setFormData({ ...formData, payment_method: v })}
+                      >
+                        <SelectTrigger id="payment_method">
+                          <SelectValue placeholder="Selecione o método de pagamento" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="cash">Dinheiro</SelectItem>
+                          <SelectItem value="credit">Crédito</SelectItem>
+                          <SelectItem value="credito_loja">Crédito Loja</SelectItem>
+                          <SelectItem value="debit">Débito</SelectItem>
+                          <SelectItem value="pix">PIX</SelectItem>
+                          <SelectItem value="boleto">Boleto</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="payment_status" className="text-sm font-medium">Status do Pagamento</Label>
+                      <Select
+                        value={formData.payment_status}
+                        onValueChange={(v) => setFormData({ ...formData, payment_status: v })}
+                      >
+                        <SelectTrigger id="payment_status">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="pending">Pendente</SelectItem>
+                          <SelectItem value="paid">Pago</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="discount" className="text-sm font-medium">Desconto (R$)</Label>
+                      <Input
+                        id="discount"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={formData.discount}
+                        onChange={(e) => setFormData({ ...formData, discount: parseFloat(e.target.value) || 0 })}
+                        placeholder="0,00"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="notes" className="text-sm font-medium">Observações</Label>
+                      <Textarea
+                        id="notes"
+                        value={formData.notes}
+                        onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                        rows={2}
+                        placeholder="Observações adicionais..."
+                        className="resize-none"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Status de Pendências */}
+                  {selectedSale && selectedSale.status_codes && selectedSale.status_codes.length > 0 && (
+                    <div className="border-t pt-4 space-y-2">
+                      <h4 className="text-sm font-semibold mb-2">Pendências da Venda</h4>
+                      <div className="flex flex-wrap gap-2">
+                        {selectedSale.status_codes.map((code: string) => (
+                          <div
+                            key={code}
+                            className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 ${getStatusColor(code as 'E' | 'C' | 'D')}`}
+                          >
+                            <span>{code}</span>
+                            <span className="text-xs opacity-75">
+                              {code === 'E' && 'Estoque'}
+                              {code === 'C' && 'Crédito'}
+                              {code === 'D' && 'Desconto'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-2">
+                        ⚠️ Esta venda não pode ser faturada enquanto houver pendências ativas.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Resumo da Venda */}
+                  <div className="border-t pt-4 space-y-2 bg-muted/30 p-4 rounded-lg">
+                    <h4 className="text-sm font-semibold mb-3">RESUMO DA VENDA</h4>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Subtotal:</span>
+                      <span className="font-medium">{formatCurrency(calculateSubtotal())}</span>
+                    </div>
+                    {formData.discount > 0 && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Desconto:</span>
+                        <span className="text-destructive">- {formatCurrency(formData.discount)}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between text-lg font-bold pt-2 border-t">
+                      <span>Total:</span>
+                      <span className="text-primary">{formatCurrency(calculateTotal())}</span>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setIsDialogOpen(false)}
+            >
+              Cancelar
+            </Button>
+            {!selectedSale && (
+              <>
+                {currentStep > 1 && (
+                  <Button
+                    variant="outline"
+                    onClick={handlePreviousStep}
+                  >
+                    <ChevronLeft className="mr-2 h-4 w-4" />
+                    Voltar
+                  </Button>
+                )}
+                {currentStep < 3 && (
+                  <Button
+                    onClick={handleNextStep}
+                    className="btn-gradient"
+                  >
+                    Próximo
+                    <ChevronRight className="ml-2 h-4 w-4" />
+                  </Button>
+                )}
+                {currentStep === 3 && (
+                  <>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        // TODO: Implementar geração de orçamento
+                        toast({ title: 'Em breve', description: 'Funcionalidade de orçamento em desenvolvimento' });
+                      }}
+                    >
+                      <Plus className="mr-2 h-4 w-4" />
+                      Gerar Orçamento
+                    </Button>
+                    <Button
+                      onClick={handleSave}
+                      className="btn-gradient"
+                      disabled={isSaving}
+                    >
+                      {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                      Salvar Venda
+                    </Button>
+                  </>
+                )}
+              </>
+            )}
+            {selectedSale && (
+              <Button
+                onClick={handleSave}
+                className="btn-gradient"
+                disabled={isSaving}
+              >
+                {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Salvar Venda
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Diálogo de Confirmação antes de Emitir Nota */}
+      <Dialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Confirmar Tipo de Nota Fiscal</DialogTitle>
+            <DialogDescription>
+              Revise os itens e confirme o tipo de nota que será gerada
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 mt-4">
+            {/* Determinar tipo final */}
+            {(() => {
+              const tipoFinal = formData.tipo_operacao === 'auto' ? determineTipoOperacao() : formData.tipo_operacao;
+              const { produtos, servicos } = getItemsByType();
+
+              return (
+                <>
+                  {/* Lista de Produtos */}
+                  {produtos.length > 0 && (
+                    <div className="space-y-2">
+                      <h4 className="font-semibold text-sm flex items-center gap-2">
+                        <Package className="h-4 w-4" />
+                        Produtos ({produtos.length})
+                      </h4>
+                      <div className="border rounded-lg divide-y max-h-48 overflow-y-auto">
+                        {produtos.map((item, idx) => (
+                          <div key={idx} className="p-3 flex justify-between items-center">
+                            <div>
+                              <p className="font-medium text-sm">{item.product?.name}</p>
+                              <p className="text-xs text-muted-foreground">
+                                Qtd: {item.quantity} x {formatCurrency(item.unit_price)}
+                              </p>
+                            </div>
+                            <span className="font-semibold">{formatCurrency(item.unit_price * item.quantity)}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="text-right">
+                        <span className="text-sm text-muted-foreground">Subtotal Produtos: </span>
+                        <span className="font-bold">
+                          {formatCurrency(produtos.reduce((sum, i) => sum + (i.unit_price * i.quantity), 0))}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Lista de Serviços */}
+                  {servicos.length > 0 && (
+                    <div className="space-y-2">
+                      <h4 className="font-semibold text-sm flex items-center gap-2">
+                        <FileText className="h-4 w-4" />
+                        Serviços ({servicos.length})
+                      </h4>
+                      <div className="border rounded-lg divide-y max-h-48 overflow-y-auto">
+                        {servicos.map((item, idx) => (
+                          <div key={idx} className="p-3 flex justify-between items-center">
+                            <div>
+                              <p className="font-medium text-sm">{item.product?.name}</p>
+                              <p className="text-xs text-muted-foreground">
+                                Qtd: {item.quantity} x {formatCurrency(item.unit_price)}
+                              </p>
+                            </div>
+                            <span className="font-semibold">{formatCurrency(item.unit_price * item.quantity)}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="text-right">
+                        <span className="text-sm text-muted-foreground">Subtotal Serviços: </span>
+                        <span className="font-bold">
+                          {formatCurrency(servicos.reduce((sum, i) => sum + (i.unit_price * i.quantity), 0))}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Tipo de Nota que será gerada */}
+                  <div className="bg-muted/50 rounded-lg p-4 space-y-2">
+                    <h4 className="font-semibold text-sm">Tipo de Nota que será Gerada:</h4>
+                    {tipoFinal === 'produto' && (
+                      <div className="flex items-center gap-2">
+                        <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm font-medium">
+                          NF-e (Nota Fiscal de Produtos)
+                        </span>
+                        <span className="text-sm text-muted-foreground">
+                          Será gerada uma nota fiscal de produtos
+                        </span>
+                      </div>
+                    )}
+                    {tipoFinal === 'servico' && (
+                      <div className="flex items-center gap-2">
+                        <span className="px-3 py-1 bg-purple-100 text-purple-800 rounded-full text-sm font-medium">
+                          NFS-e (Nota Fiscal de Serviços)
+                        </span>
+                        <span className="text-sm text-muted-foreground">
+                          Será gerada uma nota fiscal de serviços
+                        </span>
+                      </div>
+                    )}
+                    {tipoFinal === 'misto' && (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm font-medium">
+                            NF-e (Produtos)
+                          </span>
+                          <span className="text-sm text-muted-foreground">+</span>
+                          <span className="px-3 py-1 bg-purple-100 text-purple-800 rounded-full text-sm font-medium">
+                            NFS-e (Serviços)
+                          </span>
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          Serão geradas duas notas fiscais separadas: uma para produtos e outra para serviços
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Opção de alterar tipo */}
+                  {formData.tipo_operacao === 'auto' && tipoFinal === 'misto' && (
+                    <div className="bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
+                      <p className="text-sm text-yellow-800 dark:text-yellow-200 mb-2">
+                        <strong>Atenção:</strong> Esta venda contém produtos e serviços. Serão geradas duas notas fiscais.
+                      </p>
+                      <Select
+                        value={formData.tipo_operacao}
+                        onValueChange={(v) => setFormData({ ...formData, tipo_operacao: v as 'auto' | 'produto' | 'servico' | 'misto' })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="misto">Gerar duas notas (NFe + NFS-e)</SelectItem>
+                          <SelectItem value="produto">Gerar apenas NFe (produtos)</SelectItem>
+                          <SelectItem value="servico">Gerar apenas NFS-e (serviços)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowConfirmDialog(false)}>
+              Cancelar
+            </Button>
+            <Button onClick={confirmSave} disabled={isSaving} className="btn-gradient">
+              {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Confirmar e Salvar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Diálogo de Aprovação */}
+      {saleToApprove && (
+        <SaleApprovalDialog
+          sale={saleToApprove}
+          open={approvalDialogOpen}
+          onOpenChange={setApprovalDialogOpen}
+          onApproved={handleApprovalComplete}
+        />
+      )}
+
+      {/* Diálogo de Problemas de Separação */}
+      {saleWithIssues && (
+        <PickingIssuesDialog
+          saleId={saleWithIssues.id}
+          saleNumber={saleWithIssues.sale_number}
+          pickingIssues={saleWithIssues.picking_issues}
+          open={pickingIssuesDialogOpen}
+          onClose={() => {
+            setPickingIssuesDialogOpen(false);
+            setSaleWithIssues(null);
+          }}
+          onResolved={() => {
+            loadData();
+            setPickingIssuesDialogOpen(false);
+            setSaleWithIssues(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
