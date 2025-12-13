@@ -4,6 +4,7 @@
  */
 
 import { supabase } from '@/integrations/supabase/client';
+import { safeGetUUID } from '@/utils/localStorageHelper';
 
 /**
  * Obtém a empresa_id ativa do usuário
@@ -24,8 +25,8 @@ export async function getCurrentEmpresaId(): Promise<string | null> {
       }
     }
 
-    // 2. Tentar obter do localStorage
-    const savedEmpresaId = localStorage.getItem('apex-glass-selected-company-id');
+    // 2. Tentar obter do localStorage (usando função segura)
+    const savedEmpresaId = safeGetUUID('apex-glass-selected-company-id');
     if (savedEmpresaId) {
       return savedEmpresaId;
     }

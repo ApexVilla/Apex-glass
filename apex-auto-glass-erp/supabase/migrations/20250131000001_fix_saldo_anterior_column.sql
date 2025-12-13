@@ -314,3 +314,4 @@ COMMENT ON FUNCTION public.create_inventory_movement IS 'Cria uma movimentação
 
 
 
+

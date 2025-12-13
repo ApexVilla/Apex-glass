@@ -2,6 +2,12 @@ import React, { createContext, useContext, useEffect, useState, useRef } from 'r
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 import type { Profile, Company } from '@/types/database';
+import { 
+  safeGetItem, 
+  safeGetUUID, 
+  validateLocalStorageData, 
+  clearAuthDataAndRedirect 
+} from '@/utils/localStorageHelper';
 
 interface AuthContextType {
   user: User | null;
@@ -200,10 +206,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     lastProcessedUserIdRef.current = userId;
 
     try {
+      // VALIDAÇÃO: Verificar se os dados do localStorage estão válidos ANTES de usar
+      if (!validateLocalStorageData()) {
+        console.warn('⚠️ Dados do localStorage inválidos detectados durante validação');
+        // A validação já removeu os dados inválidos, continuar normalmente
+      }
+
       // CRÍTICO: Verificar empresa selecionada e definir override ANTES de qualquer query
       // Isso garante que as políticas RLS funcionem corretamente desde o início
-      const selectedCompanyKey = localStorage.getItem('apex-glass-selected-company');
-      const selectedCompanyId = localStorage.getItem('apex-glass-selected-company-id');
+      // USAR FUNÇÕES SEGURAS para ler do localStorage
+      const selectedCompanyKey = safeGetItem('apex-glass-selected-company');
+      const selectedCompanyId = safeGetUUID('apex-glass-selected-company-id');
       
       console.log('🔍 fetchProfile - Empresa no localStorage:', {
         selectedCompanyKey,
@@ -238,10 +251,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (companyData) {
           console.log('✅ Empresa encontrada:', companyData.name, companyData.id);
         } else {
-          // Empresa não encontrada, limpar localStorage
+          // Empresa não encontrada, limpar localStorage usando funções seguras
           console.warn('⚠️ Empresa não encontrada, limpando seleção');
-          localStorage.removeItem('apex-glass-selected-company');
-          localStorage.removeItem('apex-glass-selected-company-id');
+          try {
+            localStorage.removeItem('apex-glass-selected-company');
+            localStorage.removeItem('apex-glass-selected-company-id');
+          } catch (error) {
+            console.error('Erro ao limpar seleção de empresa:', error);
+          }
         }
       }
 
@@ -295,7 +312,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       }
     } catch (error) {
-      console.error('Error fetching profile:', error);
+      console.error('❌ Error fetching profile:', error);
+      
+      // Se for erro relacionado a dados corrompidos, limpar e redirecionar
+      if (
+        error instanceof SyntaxError || 
+        error instanceof TypeError ||
+        (error instanceof Error && (
+          error.message.includes('JSON') ||
+          error.message.includes('parse') ||
+          error.message.includes('localStorage') ||
+          error.message.includes('Unexpected')
+        ))
+      ) {
+        console.error('❌ Erro de formato detectado no fetchProfile, limpando dados...');
+        clearAuthDataAndRedirect();
+        return;
+      }
+      
+      // Para outros erros, apenas logar e continuar
+      // Garantir que loading seja false mesmo em caso de erro
+      setLoading(false);
     } finally {
       fetchingProfileRef.current = false;
     }
@@ -407,10 +444,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         
         // Verificar se houve logout recente antes de processar sessão
-        const justLoggedOut = sessionStorage.getItem('apex-glass-just-logged-out');
+        // Usar try-catch para leitura segura do sessionStorage
+        let justLoggedOut = false;
+        try {
+          justLoggedOut = sessionStorage.getItem('apex-glass-just-logged-out') === 'true';
+        } catch (error) {
+          console.error('Erro ao ler sessionStorage:', error);
+          // Continuar normalmente se houver erro
+        }
+        
         if (justLoggedOut && !session) {
           console.log('⚠️ Logout recente detectado no listener, não processando sessão');
-          sessionStorage.removeItem('apex-glass-just-logged-out');
+          try {
+            sessionStorage.removeItem('apex-glass-just-logged-out');
+          } catch (error) {
+            console.error('Erro ao remover flag de logout:', error);
+          }
           if (mounted) {
             setLoading(false);
           }
@@ -426,11 +475,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Verificar sessão existente ao montar o componente
     const initializeSession = async () => {
       try {
+        // VALIDAÇÃO: Verificar dados do localStorage antes de inicializar
+        if (!validateLocalStorageData()) {
+          console.warn('⚠️ Dados do localStorage inválidos na inicialização');
+          // A validação já removeu os dados inválidos, continuar normalmente
+        }
+        
         // Verificar se houve logout recente - se sim, não restaurar sessão
-        const justLoggedOut = sessionStorage.getItem('apex-glass-just-logged-out');
+        // Usar try-catch para leitura segura do sessionStorage
+        let justLoggedOut = false;
+        try {
+          justLoggedOut = sessionStorage.getItem('apex-glass-just-logged-out') === 'true';
+        } catch (error) {
+          console.error('Erro ao ler sessionStorage:', error);
+          // Continuar normalmente se houver erro
+        }
+        
         if (justLoggedOut) {
           console.log('⚠️ Logout recente detectado, não restaurando sessão');
-          sessionStorage.removeItem('apex-glass-just-logged-out');
+          try {
+            sessionStorage.removeItem('apex-glass-just-logged-out');
+          } catch (error) {
+            console.error('Erro ao remover flag de logout:', error);
+          }
           // Limpar qualquer sessão residual
           try {
             await supabase.auth.signOut();
@@ -468,7 +535,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
         }
       } catch (error) {
-        console.error('Erro ao inicializar sessão:', error);
+        console.error('❌ Erro ao inicializar sessão:', error);
+        
+        // Se for erro relacionado a dados corrompidos, limpar e redirecionar
+        if (
+          error instanceof SyntaxError || 
+          error instanceof TypeError ||
+          (error instanceof Error && (
+            error.message.includes('JSON') ||
+            error.message.includes('parse') ||
+            error.message.includes('localStorage') ||
+            error.message.includes('Unexpected')
+          ))
+        ) {
+          console.error('❌ Erro de formato detectado na inicialização, limpando dados...');
+          clearAuthDataAndRedirect();
+          return;
+        }
+        
+        // Para outros erros, apenas garantir que loading seja false
         if (mounted) {
           setLoading(false);
         }

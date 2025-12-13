@@ -1,16 +1,20 @@
 [build]
+  # Comando para instalar dependências
   command = "npm install && npm run build"
+  
+  # Diretório de saída do build (onde o Vite gera os arquivos)
   publish = "dist"
+  
+  # Diretório base do projeto
   base = "."
 
 [build.environment]
+  # Versão do Node.js
   NODE_VERSION = "18"
   NPM_VERSION = "9"
 
-# Redirects para SPA (Single Page Application)
-# O arquivo _redirects na pasta public é copiado para dist durante o build
-# e tem prioridade sobre esta configuração
-# Todas as rotas devem redirecionar para index.html
+# Configuração de redirecionamentos para SPA (Single Page Application)
+# Todas as rotas devem redirecionar para index.html para funcionar com React Router
 [[redirects]]
   from = "/*"
   to = "/index.html"
@@ -26,19 +30,19 @@
     Referrer-Policy = "strict-origin-when-cross-origin"
     Permissions-Policy = "geolocation=(), microphone=(), camera=()"
 
-# Headers para arquivos estáticos (cache)
+# Headers para arquivos estáticos (cache longo para melhor performance)
 [[headers]]
   for = "/assets/*"
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
 
-# Headers para HTML (sem cache)
+# Headers para HTML (sem cache para sempre ter a versão mais recente)
 [[headers]]
   for = "/*.html"
   [headers.values]
     Cache-Control = "public, max-age=0, must-revalidate"
 
-# Headers para imagens
+# Headers para imagens (cache longo)
 [[headers]]
   for = "/*.svg"
   [headers.values]
@@ -55,7 +59,17 @@
     Cache-Control = "public, max-age=31536000, immutable"
 
 [[headers]]
+  for = "/*.jpeg"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
   for = "/*.ico"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/*.webp"
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
 

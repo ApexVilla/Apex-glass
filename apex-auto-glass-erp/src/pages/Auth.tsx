@@ -18,6 +18,7 @@ import {
 import { toast } from '@/hooks/use-toast';
 import { Eye, EyeOff, Loader2 } from 'lucide-react';
 import { z } from 'zod';
+import { safeGetItem } from '@/utils/localStorageHelper';
 
 const loginSchema = z.object({
   email: z.string().email('Email inválido'),
@@ -75,17 +76,28 @@ export default function Auth() {
   // Isso evita que após logout a empresa seja carregada automaticamente
   useEffect(() => {
     // Verificar se houve logout recente (flag temporária)
-    const justLoggedOut = sessionStorage.getItem('apex-glass-just-logged-out');
+    // Usar try-catch para leitura segura
+    let justLoggedOut = false;
+    try {
+      justLoggedOut = sessionStorage.getItem('apex-glass-just-logged-out') === 'true';
+    } catch (error) {
+      console.error('Erro ao ler sessionStorage:', error);
+    }
     
     if (justLoggedOut) {
       // Limpar flag de logout
-      sessionStorage.removeItem('apex-glass-just-logged-out');
+      try {
+        sessionStorage.removeItem('apex-glass-just-logged-out');
+      } catch (error) {
+        console.error('Erro ao remover flag de logout:', error);
+      }
       // Limpar empresa selecionada para forçar o usuário a escolher novamente
       setSelectedCompanyKey('');
     }
     
-    const savedEmail = localStorage.getItem('apex-glass-remember-email');
-    const savedCompany = localStorage.getItem('apex-glass-remember-company');
+    // Usar funções seguras para ler do localStorage
+    const savedEmail = safeGetItem('apex-glass-remember-email');
+    const savedCompany = safeGetItem('apex-glass-remember-company');
     
     // Só carregar email e empresa se NÃO houver usuário logado E não houve logout recente
     if (!user && !loading && !justLoggedOut) {
