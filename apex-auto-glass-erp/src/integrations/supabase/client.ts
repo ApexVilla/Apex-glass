@@ -10,9 +10,24 @@ const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
 // Validação das variáveis de ambiente
 if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
-  console.warn('⚠️ Variáveis do Supabase não configuradas. Configure o arquivo .env');
-  console.warn('VITE_SUPABASE_URL:', SUPABASE_URL ? '✅' : '❌');
-  console.warn('VITE_SUPABASE_PUBLISHABLE_KEY:', SUPABASE_PUBLISHABLE_KEY ? '✅' : '❌');
+  const missingVars = [];
+  if (!SUPABASE_URL) missingVars.push('VITE_SUPABASE_URL');
+  if (!SUPABASE_PUBLISHABLE_KEY) missingVars.push('VITE_SUPABASE_PUBLISHABLE_KEY');
+  
+  const errorMessage = `❌ ERRO: Variáveis de ambiente obrigatórias não configuradas: ${missingVars.join(', ')}\n` +
+    `Configure essas variáveis no arquivo .env na raiz do projeto.\n` +
+    `Exemplo:\n` +
+    `VITE_SUPABASE_URL=https://seu-projeto.supabase.co\n` +
+    `VITE_SUPABASE_PUBLISHABLE_KEY=sua-chave-publica`;
+  
+  // Em build time, lança erro para quebrar o build
+  if (import.meta.env.MODE === 'production' || import.meta.env.PROD) {
+    throw new Error(errorMessage);
+  }
+  
+  // Em desenvolvimento, apenas avisa mas não quebra
+  console.error(errorMessage);
+  console.warn('⚠️ O build falhará em produção se essas variáveis não estiverem configuradas.');
 }
 
 // Aviso sobre problema de localStorage entre localhost e IP
@@ -26,6 +41,15 @@ if (typeof window !== 'undefined') {
       console.warn('💡 DICA: Se você fez login usando o IP (ex: 192.168.x.x:8081), precisa usar a mesma URL para manter a sessão.');
       console.warn('   O localStorage é separado por origem (localhost ≠ IP). Sempre use a mesma URL para acessar o sistema.');
     }
+  }
+}
+
+// Garantir que as variáveis existem antes de criar o cliente
+if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
+  // Se chegou aqui em produção, já lançou erro acima
+  // Em desenvolvimento, ainda permite continuar com placeholders para não quebrar o dev server
+  if (import.meta.env.MODE === 'production' || import.meta.env.PROD) {
+    throw new Error('Variáveis de ambiente do Supabase são obrigatórias');
   }
 }
 
