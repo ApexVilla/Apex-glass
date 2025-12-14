@@ -36,9 +36,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [permissions, setPermissions] = useState<Set<string>>(new Set());
   const [isMasterUser, setIsMasterUser] = useState(false);
   
+  // Wrapper para setLoading que atualiza também a ref
+  const setLoadingState = (value: boolean) => {
+    loadingRef.current = value;
+    setLoading(value);
+  };
+  
   // Refs para evitar múltiplas chamadas simultâneas
   const fetchingProfileRef = useRef(false);
   const lastProcessedUserIdRef = useRef<string | null>(null);
+  const loadingRef = useRef(false);
 
   const fetchPermissions = async (userId: string) => {
     try {
@@ -231,35 +238,58 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .eq('id', userId)
         .maybeSingle();
 
-      if (profileError) throw profileError;
+      if (profileError) {
+        console.error('❌ Erro ao buscar perfil:', profileError);
+        throw profileError;
+      }
+      
+      if (!profileData) {
+        console.warn('⚠️ Perfil não encontrado para userId:', userId);
+        fetchingProfileRef.current = false;
+        return;
+      }
+
+      console.log('✅ Perfil encontrado:', {
+        id: profileData.id,
+        email: profileData.email,
+        full_name: profileData.full_name,
+        company_id: profileData.company_id
+      });
       
       // Verificar se é master user ANTES de definir override
       const userIsMaster = profileData?.email === 'villarroelsamir85@gmail.com' || profileData?.email === 'samir@apexglass.com';
       setIsMasterUser(userIsMaster);
-
-      if (!profileData) {
-        fetchingProfileRef.current = false;
-        return;
-      }
+      console.log('👤 Tipo de usuário:', userIsMaster ? 'MASTER' : 'REGULAR');
 
       // Buscar empresa selecionada (uma única vez, reutilizando função auxiliar)
       let companyData: Company | null = null;
       
       if (selectedCompanyId || selectedCompanyKey) {
+        console.log('🔎 Buscando empresa:', { selectedCompanyId, selectedCompanyKey });
         companyData = await findCompanyByIdOrName(selectedCompanyId, selectedCompanyKey);
         
         if (companyData) {
-          console.log('✅ Empresa encontrada:', companyData.name, companyData.id);
+          console.log('✅ Empresa encontrada:', {
+            id: companyData.id,
+            name: companyData.name,
+            cnpj: companyData.cnpj
+          });
         } else {
           // Empresa não encontrada, limpar localStorage usando funções seguras
-          console.warn('⚠️ Empresa não encontrada, limpando seleção');
+          console.warn('⚠️ Empresa não encontrada com os dados fornecidos:', {
+            selectedCompanyId,
+            selectedCompanyKey
+          });
           try {
             localStorage.removeItem('apex-glass-selected-company');
             localStorage.removeItem('apex-glass-selected-company-id');
+            console.log('🧹 Dados da empresa removidos do localStorage');
           } catch (error) {
             console.error('Erro ao limpar seleção de empresa:', error);
           }
         }
+      } else {
+        console.log('ℹ️ Nenhuma empresa selecionada no localStorage');
       }
 
       // Definir override ANTES de qualquer outra operação (apenas para master users)
@@ -294,9 +324,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       // Definir empresa no estado
       if (companyData) {
-        console.log('✅✅✅ Definindo empresa selecionada no estado:', companyData.name, companyData.id);
+        console.log('📌 Definindo empresa selecionada no estado:', {
+          name: companyData.name,
+          id: companyData.id
+        });
         setCompany(companyData);
-        console.log('✅✅✅ Empresa definida com sucesso!');
+        console.log('✅ Empresa definida com sucesso no estado!');
       } else if (profileData.company_id) {
         // Fallback: usar empresa padrão do perfil
         console.log('⚠️ Usando empresa padrão do perfil (fallback):', profileData.company_id);
@@ -306,11 +339,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           .eq('id', profileData.company_id)
           .maybeSingle();
 
-        if (!companyError && defaultCompanyData) {
-          console.log('⚠️ Definindo empresa padrão do perfil:', defaultCompanyData.name);
+        if (companyError) {
+          console.error('❌ Erro ao buscar empresa padrão do perfil:', companyError);
+        } else if (defaultCompanyData) {
+          console.log('✅ Definindo empresa padrão do perfil:', {
+            name: defaultCompanyData.name,
+            id: defaultCompanyData.id
+          });
           setCompany(defaultCompanyData as Company);
+        } else {
+          console.warn('⚠️ Empresa padrão do perfil não encontrada');
         }
+      } else {
+        console.warn('⚠️ Nenhuma empresa disponível - nem selecionada nem no perfil');
       }
+      
+      console.log('✅ fetchProfile concluído com sucesso');
     } catch (error) {
       console.error('❌ Error fetching profile:', error);
       
@@ -332,15 +376,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       
       // Para outros erros, apenas logar e continuar
       // Garantir que loading seja false mesmo em caso de erro
-      setLoading(false);
+      setLoadingState(false);
     } finally {
       fetchingProfileRef.current = false;
+      // Garantir duplamente que loading seja false após fetchProfile
+      setTimeout(() => {
+        setLoadingState(false);
+      }, 100);
     }
   };
 
   useEffect(() => {
     let mounted = true;
     let sessionProcessed = false; // Flag para evitar processamento duplicado
+    
+    // TIMEOUT DE SEGURANÇA: Garantir que loading nunca trave indefinidamente
+    const loadingTimeout = setTimeout(() => {
+      if (mounted && loadingRef.current) {
+        console.warn('⚠️ TIMEOUT: Loading travado há mais de 10 segundos, forçando desativação');
+        console.warn('⚠️ Forçando desativação do loading e limpeza do estado');
+        setLoadingState(false);
+      }
+    }, 10000); // 10 segundos
 
     // Função para processar a sessão
     const processSession = async (session: Session | null, skipIfProcessed = false) => {
@@ -350,7 +407,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (skipIfProcessed && sessionProcessed && session?.user?.id === lastProcessedUserIdRef.current) {
         console.log('⏸️ Sessão já processada, ignorando chamada duplicada');
         if (mounted) {
-          setLoading(false);
+          setLoadingState(false);
+          clearTimeout(loadingTimeout);
         }
         return;
       }
@@ -374,7 +432,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               setCompany(null);
               setPermissions(new Set());
               setIsMasterUser(false);
-              setLoading(false);
+              setLoadingState(false);
+              clearTimeout(loadingTimeout);
               return;
             }
             // Usar a sessão renovada
@@ -389,7 +448,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setCompany(null);
             setPermissions(new Set());
             setIsMasterUser(false);
-            setLoading(false);
+            setLoadingState(false);
+            clearTimeout(loadingTimeout);
             return;
           }
         }
@@ -416,7 +476,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (mounted) {
-        setLoading(false);
+        setLoadingState(false);
+        clearTimeout(loadingTimeout);
       }
     };
 
@@ -436,7 +497,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setCompany(null);
             setPermissions(new Set());
             setIsMasterUser(false);
-            setLoading(false);
+            setLoadingState(false);
+            clearTimeout(loadingTimeout);
           }
           sessionProcessed = false;
           lastProcessedUserIdRef.current = null;
@@ -461,7 +523,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             console.error('Erro ao remover flag de logout:', error);
           }
           if (mounted) {
-            setLoading(false);
+            setLoadingState(false);
+            clearTimeout(loadingTimeout);
           }
           return;
         }
@@ -505,7 +568,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             // Ignorar erro se já não houver sessão
           }
           if (mounted) {
-            setLoading(false);
+            setLoadingState(false);
+            clearTimeout(loadingTimeout);
           }
           return;
         }
@@ -515,7 +579,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (error) {
           console.error('Erro ao obter sessão:', error);
           if (mounted) {
-            setLoading(false);
+            setLoadingState(false);
+            clearTimeout(loadingTimeout);
           }
           return;
         }
@@ -531,7 +596,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         } else {
           console.log('ℹ️ Nenhuma sessão encontrada');
           if (mounted) {
-            setLoading(false);
+            setLoadingState(false);
+            clearTimeout(loadingTimeout);
           }
         }
       } catch (error) {
@@ -555,7 +621,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         
         // Para outros erros, apenas garantir que loading seja false
         if (mounted) {
-          setLoading(false);
+          setLoadingState(false);
         }
       }
     };
@@ -564,9 +630,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       mounted = false;
+      clearTimeout(loadingTimeout);
       subscription.unsubscribe();
     };
-  }, []);
+  }, []); // Array vazio - executar apenas uma vez na montagem
 
   const signIn = async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
@@ -625,6 +692,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setCompany(null);
       setPermissions(new Set());
       setIsMasterUser(false);
+      setLoadingState(false);
       
       // Limpar empresa selecionada ativa (nome e ID)
       localStorage.removeItem('apex-glass-selected-company');
