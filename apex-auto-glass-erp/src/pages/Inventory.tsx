@@ -20,7 +20,7 @@ import { PickingList } from '@/components/inventory/PickingList';
 import { PickingProcess } from '@/components/inventory/PickingProcess';
 import { ConferenceList } from '@/components/inventory/ConferenceList';
 import { ConferenceProcess } from '@/components/inventory/ConferenceProcess';
-import { ProductLabelModal } from '@/components/inventory/labels/ProductLabelModal';
+import { UnifiedLabelModal } from '@/components/inventory/labels/UnifiedLabelModal';
 
 const productTypes = [
   { value: 'windshield', label: 'Para-brisa' },
@@ -649,10 +649,11 @@ export default function Inventory() {
         </DialogContent>
       </Dialog>
 
-      <ProductLabelModal
+      <UnifiedLabelModal
         isOpen={isLabelModalOpen}
         onClose={() => setIsLabelModalOpen(false)}
         product={labelProduct}
+        companyName={company?.name}
       />
     </div>
   );

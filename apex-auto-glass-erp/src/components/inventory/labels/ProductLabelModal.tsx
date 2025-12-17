@@ -10,6 +10,7 @@ import { LabelPreview } from './LabelPreview';
 import { Printer, Download, FileText, Loader2 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface ProductLabelModalProps {
     isOpen: boolean;
@@ -18,8 +19,9 @@ interface ProductLabelModalProps {
 }
 
 export function ProductLabelModal({ isOpen, onClose, product }: ProductLabelModalProps) {
+    const { company } = useAuth();
     const [config, setConfig] = useState<LabelConfig>({
-        model: 'thermal_40x30',
+        model: 'standard',
         quantity: 1,
         showName: true,
         showBarcode: true,
@@ -38,6 +40,13 @@ export function ProductLabelModal({ isOpen, onClose, product }: ProductLabelModa
     const previewRef = useRef<HTMLDivElement>(null);
 
     if (!product) return null;
+
+    // Adicionar informações da empresa ao produto se não estiverem presentes
+    const productWithCompany: ProductData = {
+        ...product,
+        company_name: product.company_name || company?.name,
+        company_address: product.company_address || company?.address || undefined,
+    };
 
     const handlePrint = async () => {
         setIsGenerating(true);
@@ -112,7 +121,10 @@ export function ProductLabelModal({ isOpen, onClose, product }: ProductLabelModa
         let width = 40;
         let height = 30;
 
-        if (config.model === 'thermal_60x40' || config.model === 'custom') {
+        if (config.model === 'standard') {
+            width = 100;
+            height = 80;
+        } else if (config.model === 'thermal_60x40' || config.model === 'custom') {
             width = 60;
             height = 40;
         }
@@ -213,6 +225,7 @@ export function ProductLabelModal({ isOpen, onClose, product }: ProductLabelModa
                                     <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
+                                    <SelectItem value="standard">Padrão Completo (100x80mm)</SelectItem>
                                     <SelectItem value="thermal_40x30">Térmica 40x30mm</SelectItem>
                                     <SelectItem value="thermal_60x40">Térmica 60x40mm</SelectItem>
                                     <SelectItem value="a4_48">Folha A4 (48 etiquetas)</SelectItem>
@@ -315,11 +328,16 @@ export function ProductLabelModal({ isOpen, onClose, product }: ProductLabelModa
                             <LabelPreview
                                 ref={previewRef}
                                 config={config}
-                                product={product}
+                                product={productWithCompany}
                             />
                         </div>
                         <p className="text-xs text-muted-foreground mt-4">
-                            Dimensões: {config.model === 'thermal_40x30' ? '40x30mm' : config.model === 'thermal_60x40' ? '60x40mm' : 'A4'}
+                            Dimensões: {
+                                config.model === 'standard' ? '100x80mm' :
+                                config.model === 'thermal_40x30' ? '40x30mm' :
+                                config.model === 'thermal_60x40' ? '60x40mm' :
+                                'A4'
+                            }
                         </p>
                     </div>
                 </div>
