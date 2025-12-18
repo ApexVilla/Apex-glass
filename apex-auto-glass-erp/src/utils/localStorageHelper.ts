@@ -227,11 +227,82 @@ export const safeGetUUID = (key: string, defaultValue: string | null = null): st
 };
 
 /**
+ * Limpa dados corrompidos do localStorage de forma segura
+ * Remove apenas chaves específicas do Apex Glass, não limpa tudo
+ */
+export const cleanCorruptedData = (): void => {
+  try {
+    console.log('🧹 Verificando e limpando dados corrompidos do localStorage...');
+    
+    const apexGlassKeys = [
+      'apex-glass-selected-company',
+      'apex-glass-selected-company-id',
+      'apex-glass-remember-email',
+      'apex-glass-remember-company',
+    ];
+    
+    let cleaned = false;
+    
+    // Validar e limpar cada chave
+    apexGlassKeys.forEach(key => {
+      try {
+        const value = localStorage.getItem(key);
+        if (value !== null) {
+          // Tentar validar o valor
+          try {
+            // Se for JSON, tentar fazer parse
+            if (value.startsWith('{') || value.startsWith('[')) {
+              JSON.parse(value);
+            }
+            // Se for UUID, validar formato
+            if (key.includes('id') || key.includes('uuid')) {
+              if (!isValidUUID(value)) {
+                console.warn(`⚠️ Removendo ${key} com valor inválido:`, value);
+                localStorage.removeItem(key);
+                cleaned = true;
+              }
+            }
+          } catch (parseError) {
+            // Se não conseguir fazer parse, remover
+            console.warn(`⚠️ Removendo ${key} com dados corrompidos:`, parseError);
+            localStorage.removeItem(key);
+            cleaned = true;
+          }
+        }
+      } catch (error) {
+        // Se houver erro ao ler, tentar remover
+        console.warn(`⚠️ Erro ao validar ${key}, removendo:`, error);
+        try {
+          localStorage.removeItem(key);
+          cleaned = true;
+        } catch (removeError) {
+          console.error(`❌ Erro ao remover ${key}:`, removeError);
+        }
+      }
+    });
+    
+    if (cleaned) {
+      console.log('✅ Dados corrompidos limpos do localStorage');
+    } else {
+      console.log('✅ Nenhum dado corrompido encontrado');
+    }
+    
+  } catch (error) {
+    console.error('❌ Erro ao limpar dados corrompidos:', error);
+    // Em caso de erro crítico, não fazer nada para não quebrar a aplicação
+  }
+};
+
+/**
  * Valida se os dados do localStorage estão em formato correto
  * Executa validações básicas e retorna true se tudo estiver OK
+ * Limpa automaticamente dados corrompidos encontrados
  */
 export const validateLocalStorageData = (): boolean => {
   try {
+    // Primeiro, limpar dados corrompidos
+    cleanCorruptedData();
+    
     // Validar chave de empresa selecionada
     const companyKey = safeGetItem('apex-glass-selected-company');
     const companyId = safeGetUUID('apex-glass-selected-company-id');
@@ -264,6 +335,12 @@ export const validateLocalStorageData = (): boolean => {
     
   } catch (error) {
     console.error('❌ Erro ao validar dados do localStorage:', error);
+    // Se houver erro, limpar dados corrompidos e retornar false
+    try {
+      cleanCorruptedData();
+    } catch (cleanError) {
+      console.error('❌ Erro ao limpar dados após validação:', cleanError);
+    }
     return false;
   }
 };
