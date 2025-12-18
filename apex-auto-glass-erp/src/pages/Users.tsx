@@ -439,20 +439,51 @@ export default function Users() {
           const maxCreateRetries = 3;
 
           while (!createSuccess && createRetries < maxCreateRetries) {
+            // Preparar dados do perfil (sem phone se não existir no banco)
+            const profileData: any = {
+              id: userId,
+              company_id: finalCompanyId,
+              full_name: formData.full_name,
+              email: formData.email,
+              role: formData.role,
+              is_active: formData.is_active,
+            };
+            
+            // Adicionar phone apenas se fornecido (evita erro se coluna não existir)
+            if (formData.phone) {
+              profileData.phone = formData.phone;
+            }
+            
             const { error: profileError } = await supabase
               .from('profiles')
-              .insert({
-                id: userId,
-                company_id: finalCompanyId,
-                full_name: formData.full_name,
-                email: formData.email,
-                role: formData.role,
-                phone: formData.phone || null,
-                is_active: formData.is_active,
-              });
+              .insert(profileData);
 
             if (profileError) {
               console.error(`Erro ao criar perfil (tentativa ${createRetries + 1}):`, profileError);
+
+              // Se o erro for de coluna não encontrada (PGRST204), tentar sem phone
+              if (profileError.code === 'PGRST204' && profileError.message?.includes('phone')) {
+                console.warn('⚠️ Coluna phone não encontrada, tentando criar perfil sem phone...');
+                // Tentar novamente sem phone
+                const { error: retryError } = await supabase
+                  .from('profiles')
+                  .insert({
+                    id: userId,
+                    company_id: finalCompanyId,
+                    full_name: formData.full_name,
+                    email: formData.email,
+                    role: formData.role,
+                    is_active: formData.is_active,
+                  });
+                
+                if (retryError) {
+                  // Se ainda der erro, tratar como erro normal
+                  profileError = retryError;
+                } else {
+                  createSuccess = true;
+                  continue;
+                }
+              }
 
               // Se o erro for de chave estrangeira, o usuário ainda não existe - aguardar mais
               if (profileError.code === '23503') {
