@@ -84,38 +84,94 @@
     <script>
       // Bloquear completamente Vercel Live em desenvolvimento local
       (function() {
-        // Bloquear carregamento de scripts do Vercel Live
-        const originalCreateElement = document.createElement;
-        document.createElement = function(tagName) {
-          const element = originalCreateElement.call(document, tagName);
-          if (tagName === 'script' && element.src) {
-            // Bloquear scripts do Vercel Live
-            if (element.src.includes('vercel.live') || element.src.includes('_next-live')) {
-              console.warn('🚫 Bloqueado script do Vercel Live:', element.src);
-              element.remove();
-              return element;
+        'use strict';
+        
+        // Bloquear antes de qualquer coisa ser carregada
+        const blockVercel = () => {
+          // Bloquear carregamento de scripts do Vercel Live
+          const originalCreateElement = document.createElement;
+          document.createElement = function(tagName, options) {
+            const element = originalCreateElement.call(document, tagName, options);
+            if (tagName === 'script') {
+              const originalSetAttribute = element.setAttribute;
+              element.setAttribute = function(name, value) {
+                if (name === 'src' && (value?.includes('vercel.live') || value?.includes('_next-live'))) {
+                  console.warn('🚫 Bloqueado script do Vercel Live:', value);
+                  return; // Não definir o src
+                }
+                return originalSetAttribute.call(this, name, value);
+              };
             }
-          }
-          return element;
+            if (tagName === 'iframe') {
+              const originalSetAttribute = element.setAttribute;
+              element.setAttribute = function(name, value) {
+                if (name === 'src' && (value?.includes('vercel.live') || value?.includes('_next-live'))) {
+                  console.warn('🚫 Bloqueado iframe do Vercel Live:', value);
+                  return; // Não definir o src
+                }
+                return originalSetAttribute.call(this, name, value);
+              };
+            }
+            return element;
+          };
+          
+          // Bloquear inserção de elementos do Vercel
+          const originalAppendChild = Node.prototype.appendChild;
+          Node.prototype.appendChild = function(child) {
+            if (child && (child.tagName === 'IFRAME' || child.tagName === 'SCRIPT')) {
+              const src = child.src || child.getAttribute?.('src') || '';
+              if (src.includes('vercel.live') || src.includes('_next-live')) {
+                console.warn('🚫 Bloqueado elemento do Vercel Live:', child.tagName, src);
+                return child; // Retorna mas não adiciona ao DOM
+              }
+            }
+            return originalAppendChild.call(this, child);
+          };
+          
+          // Bloquear inserção via insertBefore
+          const originalInsertBefore = Node.prototype.insertBefore;
+          Node.prototype.insertBefore = function(newNode, referenceNode) {
+            if (newNode && (newNode.tagName === 'IFRAME' || newNode.tagName === 'SCRIPT')) {
+              const src = newNode.src || newNode.getAttribute?.('src') || '';
+              if (src.includes('vercel.live') || src.includes('_next-live')) {
+                console.warn('🚫 Bloqueado elemento do Vercel Live (insertBefore):', newNode.tagName, src);
+                return newNode; // Retorna mas não adiciona ao DOM
+              }
+            }
+            return originalInsertBefore.call(this, newNode, referenceNode);
+          };
         };
         
-        // Bloquear iframes do Vercel
-        const originalAppendChild = Node.prototype.appendChild;
-        Node.prototype.appendChild = function(child) {
-          if (child.tagName === 'IFRAME' && child.src && (child.src.includes('vercel.live') || child.src.includes('_next-live'))) {
-            console.warn('🚫 Bloqueado iframe do Vercel Live:', child.src);
-            return child;
-          }
-          return originalAppendChild.call(this, child);
-        };
+        // Executar bloqueio imediatamente
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', blockVercel);
+        } else {
+          blockVercel();
+        }
         
         // Limpar qualquer referência ao Vercel
-        if (window.vercel) {
-          delete window.vercel;
-        }
-        if (window.__VERCEL__) {
-          delete window.__VERCEL__;
-        }
+        const clearVercel = () => {
+          if (window.vercel) {
+            delete window.vercel;
+          }
+          if (window.__VERCEL__) {
+            delete window.__VERCEL__;
+          }
+          if (window._vercel) {
+            delete window._vercel;
+          }
+        };
+        
+        clearVercel();
+        setInterval(clearVercel, 1000); // Limpar a cada segundo
+        
+        // Bloquear eventos de mensagem do Vercel
+        window.addEventListener('message', (event) => {
+          if (event.origin?.includes('vercel.live') || event.origin?.includes('vercel.com')) {
+            event.stopImmediatePropagation();
+            return false;
+          }
+        }, true);
       })();
     </script>
   </body>
