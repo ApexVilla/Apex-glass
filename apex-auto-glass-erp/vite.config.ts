@@ -17,6 +17,8 @@ export default defineConfig({
       usePolling: false,
       ignored: ['**/node_modules/**', '**/dist/**'],
     },
+    // Bloquear requisições do Vercel Live
+    middlewareMode: false,
   },
   plugins: [
     react({

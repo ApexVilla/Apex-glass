@@ -82,18 +82,41 @@
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     <script>
-      // Bloquear Vercel Live em desenvolvimento local
-      if (window.location.hostname !== 'localhost' && !window.location.hostname.startsWith('192.168.')) {
-        // Apenas em produção/vercel
-      } else {
-        // Em desenvolvimento local, bloquear scripts do Vercel
-        window.addEventListener('beforeunload', function() {
-          // Limpar qualquer tentativa de carregar Vercel Live
-          if (window.vercel) {
-            delete window.vercel;
+      // Bloquear completamente Vercel Live em desenvolvimento local
+      (function() {
+        // Bloquear carregamento de scripts do Vercel Live
+        const originalCreateElement = document.createElement;
+        document.createElement = function(tagName) {
+          const element = originalCreateElement.call(document, tagName);
+          if (tagName === 'script' && element.src) {
+            // Bloquear scripts do Vercel Live
+            if (element.src.includes('vercel.live') || element.src.includes('_next-live')) {
+              console.warn('🚫 Bloqueado script do Vercel Live:', element.src);
+              element.remove();
+              return element;
+            }
           }
-        });
-      }
+          return element;
+        };
+        
+        // Bloquear iframes do Vercel
+        const originalAppendChild = Node.prototype.appendChild;
+        Node.prototype.appendChild = function(child) {
+          if (child.tagName === 'IFRAME' && child.src && (child.src.includes('vercel.live') || child.src.includes('_next-live'))) {
+            console.warn('🚫 Bloqueado iframe do Vercel Live:', child.src);
+            return child;
+          }
+          return originalAppendChild.call(this, child);
+        };
+        
+        // Limpar qualquer referência ao Vercel
+        if (window.vercel) {
+          delete window.vercel;
+        }
+        if (window.__VERCEL__) {
+          delete window.__VERCEL__;
+        }
+      })();
     </script>
   </body>
 </html>

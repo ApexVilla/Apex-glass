@@ -403,11 +403,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // TIMEOUT DE SEGURANÇA: Garantir que loading nunca trave indefinidamente
     const loadingTimeout = setTimeout(() => {
       if (mounted && loadingRef.current) {
-        console.warn('⚠️ TIMEOUT: Loading travado há mais de 10 segundos, forçando desativação');
+        console.warn('⚠️ TIMEOUT: Loading travado há mais de 8 segundos, forçando desativação');
         console.warn('⚠️ Forçando desativação do loading e limpeza do estado');
         setLoadingState(false);
+        // Limpar qualquer estado pendente
+        if (mounted) {
+          clearTimeout(loadingTimeout);
+        }
       }
-    }, 10000); // 10 segundos
+    }, 8000); // 8 segundos (reduzido para resposta mais rápida)
 
     // Função para processar a sessão
     const processSession = async (session: Session | null, skipIfProcessed = false) => {
