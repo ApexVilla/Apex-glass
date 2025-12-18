@@ -340,27 +340,33 @@ export default function Users() {
           const isUserAlreadyRegistered = 
             signUpError.message?.includes('already registered') || 
             signUpError.message?.includes('User already registered') ||
-            signUpError.message?.includes('already exists');
+            signUpError.message?.includes('already exists') ||
+            signUpError.message?.toLowerCase().includes('user already');
           
           if (isUserAlreadyRegistered) {
+            console.log('⚠️ Usuário já registrado, buscando perfil existente...');
+            
             // Buscar o perfil existente pelo email
             const { data: existingProfile, error: profileSearchError } = await supabase
               .from('profiles')
-              .select('id')
+              .select('id, email, full_name, company_id')
               .eq('email', formData.email)
               .maybeSingle();
             
             if (profileSearchError) {
-              console.error('Erro ao buscar perfil existente:', profileSearchError);
-              throw new Error('Usuário já está cadastrado, mas ocorreu um erro ao buscar o perfil. Entre em contato com o administrador.');
+              console.error('❌ Erro ao buscar perfil existente:', profileSearchError);
+              // Lançar erro amigável
+              throw new Error('Este email já está cadastrado no sistema. Se você já tem uma conta, faça login normalmente.');
             }
             
             if (existingProfile?.id) {
               userId = existingProfile.id;
               isExistingUser = true;
-              console.log('Usuário já existe, atualizando perfil:', userId);
+              console.log('✅ Usuário já existe, atualizando perfil:', userId);
             } else {
-              // Se não encontrou o perfil, informar ao usuário
+              // Se não encontrou o perfil, pode ser que o usuário existe no auth mas não tem perfil
+              // Neste caso, informar ao usuário que precisa fazer login
+              console.warn('⚠️ Perfil não encontrado, mas usuário já existe no auth');
               throw new Error('Este email já está cadastrado no sistema. Se você já tem uma conta, faça login normalmente.');
             }
           } else {
@@ -603,13 +609,31 @@ export default function Users() {
       await loadUsers();
     } catch (error: any) {
       console.error('Error saving user:', error);
+      
+      // Mensagem de erro mais amigável
+      let errorMessage = 'Erro ao salvar usuário';
+      
+      if (error.message) {
+        if (error.message.includes('already registered') || error.message.includes('already exists')) {
+          errorMessage = 'Este email já está cadastrado no sistema. Se você já tem uma conta, faça login normalmente.';
+        } else if (error.message.includes('password')) {
+          errorMessage = 'A senha deve ter no mínimo 6 caracteres.';
+        } else if (error.message.includes('email')) {
+          errorMessage = 'Email inválido ou já cadastrado.';
+        } else {
+          errorMessage = error.message;
+        }
+      }
+      
       toast({
         title: 'Erro',
-        description: error.message || 'Erro ao salvar usuário',
+        description: errorMessage,
         variant: 'destructive',
       });
     } finally {
+      // SEMPRE desativar loading, mesmo em caso de erro
       setIsSaving(false);
+      console.log('✅ Loading desativado após salvar usuário');
     }
   };
 
