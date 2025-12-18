@@ -17,6 +17,7 @@ import {
   BarChart3,
   Shield,
   Building2,
+  CheckCircle2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -36,6 +37,7 @@ const menuItems = [
   { icon: DollarSign, label: 'Financeiro', path: '/financial', permission: 'financial.view' },
   { icon: FileText, label: 'Notas de Saída', path: '/fiscal/saida', permission: 'fiscal.view' },
   { icon: FileText, label: 'Notas de Entrada', path: '/fiscal/entrada', permission: 'fiscal.view' },
+  { icon: CheckCircle2, label: 'Verificação NF-e', path: '/fiscal/verificacao', permission: 'fiscal.view' },
   { icon: BarChart3, label: 'Relatórios', path: '/reports', permission: 'reports.view' },
   { icon: Shield, label: 'Usuários', path: '/users', permission: 'users.view' },
   { icon: Settings, label: 'Configurações', path: '/settings', permission: 'settings.view' },

@@ -61,7 +61,7 @@ export default function FiscalNotes() {
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
     const [isDialogOpen, setIsDialogOpen] = useState(false);
-    const { profile } = useAuth();
+    const { profile, company } = useAuth();
     const [selectedNoteType, setSelectedNoteType] = useState<'nfe' | 'nfse'>('nfe');
     const [selectedSale, setSelectedSale] = useState<string | null>(null);
     const [approvedSales, setApprovedSales] = useState<any[]>([]);
@@ -80,9 +80,16 @@ export default function FiscalNotes() {
     const [sefazResult, setSefazResult] = useState<any>(null);
 
     useEffect(() => {
-        loadNotes();
+        // Aguardar company estar disponível antes de carregar notas
+        if (company?.id) {
+            loadNotes();
+        } else {
+            // Se company não estiver disponível, apenas marcar como não carregando
+            // para evitar loop infinito
+            setLoading(false);
+        }
         loadApprovedSales();
-    }, []);
+    }, [company?.id]);
 
     useEffect(() => {
         const tab = searchParams.get('tab') || 'todas';
@@ -94,17 +101,20 @@ export default function FiscalNotes() {
     }, [notes]);
 
     const loadNotes = async () => {
-        if (!profile?.company_id) {
+        if (!company?.id) {
+            console.warn('⚠️ [FiscalNotes] company.id não disponível ainda, aguardando...');
             setNotes([]);
+            setLoading(true); // Manter loading enquanto aguarda company
             return;
         }
 
+        setLoading(true);
         try {
             const { data, error } = await supabase
-                .from('invoices' as any)
+                .from('invoice_headers' as any)
                 .select('*')
-                .eq('type', 'saida')
-                .eq('company_id', profile.company_id)
+                .eq('tipo', 'saida')
+                .eq('company_id', company.id)
                 .order('created_at', { ascending: false });
 
             if (error) {
@@ -112,22 +122,30 @@ export default function FiscalNotes() {
                 
                 // Se o erro for de tabela não encontrada, dar instruções claras
                 if (error.code === 'PGRST205' || error.message?.includes('Could not find the table')) {
+                    console.error('❌ [FiscalNotes] Tabela invoice_headers não encontrada:', error);
+                    // Não mostrar toast repetidamente, apenas no console
+                    console.warn('💡 Execute a migration 20250101000000_create_invoice_module.sql no Supabase');
+                } else {
+                    console.error('❌ [FiscalNotes] Erro ao carregar notas:', error);
                     toast({ 
-                        title: 'Tabela não encontrada', 
-                        description: 'A tabela invoices não existe. Execute o script EXECUTAR-AGORA-CRIAR-TABELA-INVOICES.sql no Supabase SQL Editor.',
-                        variant: 'destructive',
-                        duration: 10000
+                        title: 'Erro', 
+                        description: `Erro ao carregar notas: ${error.message}`,
+                        variant: 'destructive' 
                     });
                 }
                 setNotes([]);
                 return;
             }
             setNotes(data || []);
-        } catch (error) {
+        } catch (error: any) {
             console.error('Error loading notes:', error);
             // Não mostrar toast para erro de tabela não encontrada
-            if ((error as any)?.code !== 'PGRST205') {
-                toast({ title: 'Erro', description: 'Erro ao carregar notas fiscais', variant: 'destructive' });
+            if (error?.code !== 'PGRST205') {
+                toast({ 
+                    title: 'Erro', 
+                    description: 'Erro ao carregar notas fiscais', 
+                    variant: 'destructive' 
+                });
             }
             setNotes([]);
         } finally {
@@ -607,20 +625,21 @@ export default function FiscalNotes() {
         // Calcular totais
         const totalNota = mappedItems.reduce((sum, item) => sum + item.valor_total, 0);
 
-        // Obter próximo número de nota da tabela invoices
+        // Obter próximo número de nota da tabela invoice_headers
         let nextNumber = 1;
         try {
             const { data: lastNote, error: lastNoteError } = await supabase
-                .from('invoices' as any)
-                .select('invoice_number')
-                .eq('type', 'saida')
-                .order('invoice_number', { ascending: false })
+                .from('invoice_headers' as any)
+                .select('numero_nota')
+                .eq('tipo', 'saida')
+                .eq('company_id', company?.id || '')
+                .order('numero_nota', { ascending: false })
                 .limit(1)
                 .maybeSingle();
 
             // Se encontrar uma nota, usar o próximo número
             if (lastNote && !lastNoteError) {
-                nextNumber = (lastNote.invoice_number || 0) + 1;
+                nextNumber = (lastNote.numero_nota || 0) + 1;
             }
         } catch (error) {
             // Se der erro (tabela não existe, etc), começar do 1
@@ -644,35 +663,50 @@ export default function FiscalNotes() {
             }
         }
 
-        // Criar nota fiscal usando a tabela invoices
+        // Criar nota fiscal usando a tabela invoice_headers
+        if (!company?.id) {
+            console.error('❌ [FiscalNotes] company.id não disponível para criar nota');
+            throw new Error('Empresa não selecionada. Selecione uma empresa antes de criar a nota fiscal.');
+        }
+
         const { data: headerData, error: headerError } = await supabase
-            .from('invoices' as any)
+            .from('invoice_headers' as any)
             .insert([{
-                company_id: profile?.company_id || null,
-                type: 'saida',
-                supplier_customer: customerName,
-                description: `Nota Fiscal de ${noteType === 'nfse' ? 'Serviços' : 'Mercadorias'} - Venda #${sale.sale_number || sale.id}`,
-                amount: totalNota,
-                issue_date: new Date().toISOString().split('T')[0],
-                status: 'pending',
-                notes: `Gerada automaticamente da venda ${sale.sale_number || sale.id}. Modelo: ${modeloDocumento}`
+                company_id: company.id,
+                tipo: 'saida',
+                modelo_documento: modeloDocumento,
+                numero_nota: nextNumber,
+                serie: '1',
+                data_emissao: new Date().toISOString().split('T')[0],
+                data_saida: new Date().toISOString().split('T')[0],
+                customer_id: sale.customer_id || null,
+                total_nota: totalNota,
+                status: 'rascunho',
+                natureza_operacao: `Venda de ${noteType === 'nfse' ? 'Serviços' : 'Mercadorias'}`,
+                mensagens_observacoes: `Gerada automaticamente da venda ${sale.sale_number || sale.id}. Modelo: ${modeloDocumento}`
             }])
             .select()
             .single();
 
         if (headerError) {
-            console.error('Erro ao criar nota fiscal:', headerError);
+            console.error('❌ [FiscalNotes] Erro ao criar nota fiscal:', headerError);
             
             // Se o erro for de tabela não encontrada, dar uma mensagem mais clara
             if (headerError.code === 'PGRST205' || headerError.message?.includes('Could not find the table')) {
                 throw new Error(
-                    'Tabela de notas fiscais não encontrada. ' +
-                    'Por favor, execute a migration 20250120000000_fix_invoices_table.sql no Supabase ou reinicie o PostgREST.'
+                    'Tabela invoice_headers não encontrada. ' +
+                    'Por favor, execute a migration 20250101000000_create_invoice_module.sql no Supabase.'
                 );
             }
             
             throw new Error(`Erro ao criar nota fiscal: ${headerError.message}`);
         }
+        
+        if (!headerData?.id) {
+            console.error('❌ [FiscalNotes] Nota criada mas sem ID retornado');
+            throw new Error('Erro ao criar nota fiscal: ID não retornado');
+        }
+        
         const invoiceId = headerData.id;
 
         // Criar movimentações de estoque para os produtos vendidos
@@ -689,11 +723,11 @@ export default function FiscalNotes() {
                     await supabase
                         .from('inventory_movements')
                         .insert([{
-                            company_id: profile?.company_id || null,
+                            company_id: company?.id || null,
                             product_id: saleItem.product_id,
                             type: 'saida_venda',
                             quantity: item.quantidade,
-                            reason: `NF Saída ${headerData.invoice_number} - Venda #${sale.sale_number || sale.id}`,
+                            reason: `NF Saída ${headerData.numero_nota} - Venda #${sale.sale_number || sale.id}`,
                             reference_id: sale.id,
                             user_id: profile?.id || null
                         }]);
@@ -718,19 +752,20 @@ export default function FiscalNotes() {
 
         toast({
             title: 'Sucesso',
-            description: `Nota Fiscal ${headerData.invoice_number} gerada com sucesso!`,
+            description: `Nota Fiscal ${headerData.numero_nota} gerada com sucesso!`,
         });
     };
 
     const sendToSefaz = async (invoiceId: string, numeroNota: number) => {
         try {
             // TODO: Aqui você implementaria a chamada real para a API da SEFAZ
-            // Por enquanto, apenas atualizamos o status para paid (pago/confirmado)
+            // Por enquanto, apenas atualizamos o status
             const { error: updateError } = await supabase
-                .from('invoices' as any)
+                .from('invoice_headers' as any)
                 .update({
-                    status: 'paid',
-                    notes: `Nota ${numeroNota} gerada. Aguardando envio para SEFAZ.`
+                    status: 'confirmado',
+                    status_envio_sefaz: 'enviado',
+                    mensagem_retorno_sefaz: `Nota ${numeroNota} gerada. Aguardando envio para SEFAZ.`
                 })
                 .eq('id', invoiceId);
 
@@ -762,7 +797,7 @@ export default function FiscalNotes() {
             const chave = nota.chave_acesso || nota.chave;
             const response = await sefazService.consultarSituacaoNotaEmitida(
                 chave,
-                profile?.company_id || '',
+                company?.id || '',
                 profile?.id
             );
 
@@ -790,7 +825,7 @@ export default function FiscalNotes() {
 
         try {
             // Buscar UF da empresa
-            const config = await sefazService.getFiscalConfig(profile?.company_id || '');
+            const config = await sefazService.getFiscalConfig(company?.id || '');
             const uf = config?.uf || 'SP';
             const ambiente = config?.ambiente || 'homologacao';
 
@@ -832,7 +867,7 @@ export default function FiscalNotes() {
             const protocolo = await sefazService.baixarProtocolo(
                 chave,
                 nota.protocolo,
-                profile?.company_id || '',
+                company?.id || '',
                 profile?.id
             );
 
@@ -878,11 +913,21 @@ export default function FiscalNotes() {
     const handleDelete = async (id: string) => {
         if (!confirm('Tem certeza que deseja excluir esta nota?')) return;
         try {
-            const { error } = await supabase.from('invoices' as any).delete().eq('id', id);
-            if (error) throw error;
+            if (!id || id === 'undefined' || id === 'null') {
+                console.error('❌ [FiscalNotes] ID inválido para exclusão:', id);
+                toast({ title: 'Erro', description: 'ID da nota inválido', variant: 'destructive' });
+                return;
+            }
+            
+            const { error } = await supabase.from('invoice_headers' as any).delete().eq('id', id);
+            if (error) {
+                console.error('❌ [FiscalNotes] Erro ao excluir nota:', error);
+                throw error;
+            }
             toast({ title: 'Sucesso', description: 'Nota excluída' });
             loadNotes();
         } catch (error: any) {
+            console.error('❌ [FiscalNotes] Erro ao excluir nota:', error);
             toast({ title: 'Erro', description: error.message, variant: 'destructive' });
         }
     };
@@ -1251,7 +1296,19 @@ export default function FiscalNotes() {
                         notes={filteredNotes()}
                         loading={loading}
                         onPrintDAF={handlePrintDAF}
-                        onEdit={(id) => navigate(`/fiscal/edit/${id}`)}
+                        onEdit={(id) => {
+                            if (!id || id === 'undefined' || id === 'null') {
+                                console.error('❌ [FiscalNotes] ID inválido para edição:', id);
+                                toast({ 
+                                    title: 'Erro', 
+                                    description: 'ID da nota inválido. Não é possível editar.', 
+                                    variant: 'destructive' 
+                                });
+                                return;
+                            }
+                            console.log('✅ [FiscalNotes] Navegando para edição da nota:', id);
+                            navigate(`/fiscal/edit/${id}`);
+                        }}
                         onDelete={handleDelete}
                         getStatusBadge={getStatusBadge}
                         getNoteType={getNoteType}
@@ -1264,7 +1321,19 @@ export default function FiscalNotes() {
                         notes={filteredNotes()}
                         loading={loading}
                         onPrintDAF={handlePrintDAF}
-                        onEdit={(id) => navigate(`/fiscal/edit/${id}`)}
+                        onEdit={(id) => {
+                            if (!id || id === 'undefined' || id === 'null') {
+                                console.error('❌ [FiscalNotes] ID inválido para edição:', id);
+                                toast({ 
+                                    title: 'Erro', 
+                                    description: 'ID da nota inválido. Não é possível editar.', 
+                                    variant: 'destructive' 
+                                });
+                                return;
+                            }
+                            console.log('✅ [FiscalNotes] Navegando para edição da nota:', id);
+                            navigate(`/fiscal/edit/${id}`);
+                        }}
                         onDelete={handleDelete}
                         getStatusBadge={getStatusBadge}
                         getNoteType={getNoteType}
@@ -1278,7 +1347,19 @@ export default function FiscalNotes() {
                         notes={filteredNotes()}
                         loading={loading}
                         onPrintDAF={handlePrintDAF}
-                        onEdit={(id) => navigate(`/fiscal/edit/${id}`)}
+                        onEdit={(id) => {
+                            if (!id || id === 'undefined' || id === 'null') {
+                                console.error('❌ [FiscalNotes] ID inválido para edição:', id);
+                                toast({ 
+                                    title: 'Erro', 
+                                    description: 'ID da nota inválido. Não é possível editar.', 
+                                    variant: 'destructive' 
+                                });
+                                return;
+                            }
+                            console.log('✅ [FiscalNotes] Navegando para edição da nota:', id);
+                            navigate(`/fiscal/edit/${id}`);
+                        }}
                         onDelete={handleDelete}
                         getStatusBadge={getStatusBadge}
                         getNoteType={getNoteType}
@@ -1292,7 +1373,19 @@ export default function FiscalNotes() {
                         notes={filteredNotes()}
                         loading={loading}
                         onPrintDAF={handlePrintDAF}
-                        onEdit={(id) => navigate(`/fiscal/edit/${id}`)}
+                        onEdit={(id) => {
+                            if (!id || id === 'undefined' || id === 'null') {
+                                console.error('❌ [FiscalNotes] ID inválido para edição:', id);
+                                toast({ 
+                                    title: 'Erro', 
+                                    description: 'ID da nota inválido. Não é possível editar.', 
+                                    variant: 'destructive' 
+                                });
+                                return;
+                            }
+                            console.log('✅ [FiscalNotes] Navegando para edição da nota:', id);
+                            navigate(`/fiscal/edit/${id}`);
+                        }}
                         onDelete={handleDelete}
                         getStatusBadge={getStatusBadge}
                         getNoteType={getNoteType}
@@ -1499,7 +1592,22 @@ function NotesTable({
                                         </>
                                     )}
                                     {(!nota.status_envio_sefaz || nota.status_envio_sefaz === 'nao_enviado') && (
-                                        <Button size="sm" variant="outline" onClick={() => navigate(`/fiscal/edit/${nota.id}`)}>
+                                        <Button 
+                                            size="sm" 
+                                            variant="outline" 
+                                            onClick={() => {
+                                                if (!nota.id || nota.id === 'undefined' || nota.id === 'null') {
+                                                    console.error('❌ [FiscalNotes] ID inválido da nota:', nota.id);
+                                                    toast({ 
+                                                        title: 'Erro', 
+                                                        description: 'ID da nota inválido.', 
+                                                        variant: 'destructive' 
+                                                    });
+                                                    return;
+                                                }
+                                                navigate(`/fiscal/edit/${nota.id}`);
+                                            }}
+                                        >
                                             Emitir
                                         </Button>
                                     )}

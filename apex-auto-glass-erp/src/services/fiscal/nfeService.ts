@@ -9,6 +9,7 @@ import { xmlSignatureService } from './xmlSignatureService';
 import { certificateService } from './certificateService';
 import { getSefazEndpoints, UF } from './sefazEndpoints';
 import { NotaFiscal } from '@/types/fiscal';
+import { fiscalAuditor } from './fiscalAuditor';
 
 export interface NFeEmitida {
     id?: string;
@@ -78,6 +79,20 @@ export const nfeService = {
      */
     async criarNFe(nota: NotaFiscal, companyId: string, userId?: string): Promise<string> {
         try {
+            // AUDITORIA FISCAL: Validar antes de emitir
+            const emitenteCNPJ = nota.emitente.cpf_cnpj.replace(/\D/g, '');
+            const canEmit = await fiscalAuditor.canEmitNFe(companyId, emitenteCNPJ);
+            
+            if (!canEmit.canEmit) {
+                throw new Error(`❌ EMISSÃO BLOQUEADA: ${canEmit.reason}`);
+            }
+
+            // Validar CNPJ do emitente
+            const cnpjValidation = fiscalAuditor.validateCNPJ(emitenteCNPJ);
+            if (!cnpjValidation.isValid) {
+                throw new Error(`❌ CNPJ INVÁLIDO: ${cnpjValidation.message}`);
+            }
+
             // Gerar chave de acesso
             const chaveAcesso = this.gerarChaveAcesso(nota);
 

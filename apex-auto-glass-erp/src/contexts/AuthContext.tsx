@@ -200,12 +200,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Evitar múltiplas chamadas simultâneas para o mesmo usuário
     if (fetchingProfileRef.current) {
       console.log('⏸️ fetchProfile já em execução, ignorando chamada duplicada');
+      // Mesmo retornando cedo, garantir que loading seja false se o perfil já foi carregado
+      if (profile && company) {
+        setLoadingState(false);
+      }
       return;
     }
 
     // Se já processamos este usuário recentemente, pular
     if (lastProcessedUserIdRef.current === userId && profile && company) {
       console.log('⏸️ Perfil já carregado para este usuário, ignorando chamada duplicada');
+      setLoadingState(false);
       return;
     }
 
@@ -246,6 +251,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!profileData) {
         console.warn('⚠️ Perfil não encontrado para userId:', userId);
         fetchingProfileRef.current = false;
+        setLoadingState(false);
         return;
       }
 
@@ -355,6 +361,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       
       console.log('✅ fetchProfile concluído com sucesso');
+      // Definir loading como false IMEDIATAMENTE após concluir com sucesso
+      setLoadingState(false);
     } catch (error) {
       console.error('❌ Error fetching profile:', error);
       
@@ -379,10 +387,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoadingState(false);
     } finally {
       fetchingProfileRef.current = false;
-      // Garantir duplamente que loading seja false após fetchProfile
+      // Garantir duplamente que loading seja false após fetchProfile (backup)
+      // Usar setTimeout menor para resposta mais rápida
       setTimeout(() => {
         setLoadingState(false);
-      }, 100);
+      }, 50);
     }
   };
 
@@ -416,16 +425,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSession(session);
       setUser(session?.user ?? null);
 
-      if (session?.user) {
-        // Verificar se a sessão ainda é válida
-        const now = Math.floor(Date.now() / 1000);
-        if (session.expires_at && session.expires_at < now) {
-          // Sessão expirada, fazer refresh
-          console.log('Sessão expirada, tentando renovar...');
-          try {
-            const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
-            if (refreshError || !refreshData.session) {
-              console.error('Erro ao renovar sessão:', refreshError);
+      try {
+        if (session?.user) {
+          // Verificar se a sessão ainda é válida
+          const now = Math.floor(Date.now() / 1000);
+          if (session.expires_at && session.expires_at < now) {
+            // Sessão expirada, fazer refresh
+            console.log('Sessão expirada, tentando renovar...');
+            try {
+              const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+              if (refreshError || !refreshData.session) {
+                console.error('Erro ao renovar sessão:', refreshError);
+                setSession(null);
+                setUser(null);
+                setProfile(null);
+                setCompany(null);
+                setPermissions(new Set());
+                setIsMasterUser(false);
+                setLoadingState(false);
+                clearTimeout(loadingTimeout);
+                return;
+              }
+              // Usar a sessão renovada
+              session = refreshData.session;
+              setSession(session);
+              setUser(session.user);
+            } catch (error) {
+              console.error('Erro ao renovar sessão:', error);
               setSession(null);
               setUser(null);
               setProfile(null);
@@ -436,48 +462,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               clearTimeout(loadingTimeout);
               return;
             }
-            // Usar a sessão renovada
-            session = refreshData.session;
-            setSession(session);
-            setUser(session.user);
-          } catch (error) {
-            console.error('Erro ao renovar sessão:', error);
-            setSession(null);
-            setUser(null);
-            setProfile(null);
-            setCompany(null);
-            setPermissions(new Set());
-            setIsMasterUser(false);
-            setLoadingState(false);
-            clearTimeout(loadingTimeout);
-            return;
           }
-        }
 
-        // Processar perfil (sem delay desnecessário)
-        await fetchProfile(session.user.id);
-        sessionProcessed = true;
-      } else {
-        // Ao fazer logout, limpar override imediatamente
-        try {
-          await supabase.rpc('set_user_company_override', {
-            p_company_id: null
-          });
-        } catch (error) {
-          console.error('Erro ao limpar override no logout:', error);
+          // Processar perfil (sem delay desnecessário)
+          await fetchProfile(session.user.id);
+          sessionProcessed = true;
+        } else {
+          // Ao fazer logout, limpar override imediatamente
+          try {
+            await supabase.rpc('set_user_company_override', {
+              p_company_id: null
+            });
+          } catch (error) {
+            console.error('Erro ao limpar override no logout:', error);
+          }
+          
+          setProfile(null);
+          setCompany(null);
+          setPermissions(new Set());
+          setIsMasterUser(false);
+          sessionProcessed = false;
+          lastProcessedUserIdRef.current = null;
         }
-        
-        setProfile(null);
-        setCompany(null);
-        setPermissions(new Set());
-        setIsMasterUser(false);
-        sessionProcessed = false;
-        lastProcessedUserIdRef.current = null;
-      }
-
-      if (mounted) {
+      } catch (error) {
+        console.error('❌ Erro ao processar sessão:', error);
+        // Em caso de erro, garantir que loading seja false
         setLoadingState(false);
-        clearTimeout(loadingTimeout);
+      } finally {
+        // SEMPRE definir loading como false no final, independente do que aconteceu
+        if (mounted) {
+          setLoadingState(false);
+          clearTimeout(loadingTimeout);
+        }
       }
     };
 

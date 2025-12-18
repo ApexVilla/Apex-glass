@@ -143,7 +143,7 @@ interface ParsedInvoice {
 }
 
 export default function XMLImport() {
-    const { profile } = useAuth();
+    const { profile, company } = useAuth();
     const navigate = useNavigate();
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [xmlContent, setXmlContent] = useState<string>('');
@@ -548,10 +548,21 @@ export default function XMLImport() {
             let supplierId = await findOrCreateSupplier(parsedInvoice.emitente);
 
             // Criar nota fiscal de entrada
+            if (!company?.id) {
+                console.error('❌ [XMLImport] company.id não disponível');
+                toast({
+                    title: 'Erro',
+                    description: 'Empresa não selecionada. Selecione uma empresa antes de importar.',
+                    variant: 'destructive'
+                });
+                setIsImporting(false);
+                return;
+            }
+
             const { data: invoiceHeader, error: headerError } = await supabase
                 .from('invoice_headers')
                 .insert([{
-                    company_id: profile?.company_id,
+                    company_id: company.id,
                     supplier_id: supplierId,
                     tipo: parsedInvoice.direction === 'entrada' ? 'entrada' : 'saida',
                     data_emissao: parsedInvoice.dataEmissao,

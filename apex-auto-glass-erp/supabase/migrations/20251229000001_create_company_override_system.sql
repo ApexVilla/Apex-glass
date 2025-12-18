@@ -102,3 +102,5 @@ COMMENT ON FUNCTION public.get_user_company_id IS 'Retorna company_id do overrid
 
 
 
+
+

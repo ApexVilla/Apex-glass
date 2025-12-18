@@ -55,7 +55,7 @@ export default function FiscalEntryNotes() {
     const [notes, setNotes] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
-    const { profile } = useAuth();
+    const { profile, company } = useAuth();
     const [stats, setStats] = useState({
         totalNotas: 0,
         valorTotal: 0,
@@ -64,10 +64,14 @@ export default function FiscalEntryNotes() {
     const [activeTab, setActiveTab] = useState<string>(searchParams.get('tab') || 'todas');
 
     useEffect(() => {
-        if (profile?.company_id) {
+        // Aguardar company estar disponível antes de carregar notas
+        if (company?.id) {
             loadNotes();
+        } else {
+            // Se company não estiver disponível, apenas marcar como não carregando
+            setLoading(false);
         }
-    }, [profile?.company_id]);
+    }, [company?.id]);
 
     useEffect(() => {
         const tab = searchParams.get('tab') || 'todas';
@@ -79,7 +83,8 @@ export default function FiscalEntryNotes() {
     }, [notes]);
 
     const loadNotes = async () => {
-        if (!profile?.company_id) {
+        if (!company?.id) {
+            console.error('❌ [FiscalEntryNotes] company.id não disponível');
             setLoading(false);
             return;
         }
@@ -91,7 +96,7 @@ export default function FiscalEntryNotes() {
                     *,
                     supplier:suppliers(nome_razao, nome_fantasia, cpf_cnpj)
                 `)
-                .eq('company_id', profile.company_id)
+                .eq('company_id', company.id)
                 .order('created_at', { ascending: false });
 
             if (error) {
@@ -105,9 +110,8 @@ export default function FiscalEntryNotes() {
                 return;
             }
             
-            console.log('Notas carregadas:', data?.length || 0);
-            console.log('Dados das notas:', data);
-            console.log('Company ID usado:', profile.company_id);
+            console.log('✅ [FiscalEntryNotes] Notas carregadas:', data?.length || 0);
+            console.log('✅ [FiscalEntryNotes] Company ID usado:', company.id);
             
             // Se não houver supplier, tentar buscar manualmente
             if (data && data.length > 0) {

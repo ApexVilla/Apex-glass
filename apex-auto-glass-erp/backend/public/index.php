@@ -4,6 +4,7 @@ require_once __DIR__ . '/../vendor/autoload.php';
 
 use App\Router;
 use App\Controllers\InventoryController;
+use App\Controllers\NfeController;
 use Dotenv\Dotenv;
 
 // CORS Headers
@@ -27,6 +28,15 @@ $router = new Router();
 
 // Inventory Routes
 $router->get('/api/inventory/report', [InventoryController::class, 'getReport']);
+
+// NF-e Routes
+$router->get('/api/nfe/status', [NfeController::class, 'consultarStatus']);
+$router->post('/api/nfe/gerar', [NfeController::class, 'gerarEAutorizar']);
+$router->get('/api/nfe/consultar', [NfeController::class, 'consultarPorChave']);
+$router->get('/api/nfe/buscar', [NfeController::class, 'buscar']);
+$router->post('/api/nfe/cancelar', [NfeController::class, 'cancelar']);
+$router->post('/api/nfe/cce', [NfeController::class, 'emitirCCe']);
+$router->post('/api/nfe/inutilizar', [NfeController::class, 'inutilizar']);
 
 // Dispatch
 $router->dispatch();

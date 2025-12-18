@@ -15,16 +15,26 @@ export default function FiscalNoteCreate() {
     const [mode, setMode] = useState<'entry' | 'exit' | null>(null);
     const [budgetModalOpen, setBudgetModalOpen] = useState(false);
     const [initialData, setInitialData] = useState<Partial<FiscalNote>>({});
-    const { profile } = useAuth();
+    const { profile, company } = useAuth();
 
 
     const handleSave = async (data: FiscalNote) => {
         try {
+            if (!company?.id) {
+                console.error('❌ [FiscalNoteCreate] company.id não disponível');
+                toast({
+                    title: "Erro",
+                    description: "Empresa não selecionada. Selecione uma empresa antes de criar a nota fiscal.",
+                    variant: "destructive"
+                });
+                return;
+            }
+
             // 1. Insert Header
             const { data: headerData, error: headerError } = await supabase
                 .from('invoice_headers' as any)
                 .insert([{
-                    company_id: profile?.company_id || null,
+                    company_id: company.id,
                     establishment_id: data.establishment_id,
                     supplier_id: data.supplier_id,
                     customer_id: data.customer_id,
@@ -72,7 +82,16 @@ export default function FiscalNoteCreate() {
                 .select()
                 .single();
 
-            if (headerError) throw headerError;
+            if (headerError) {
+                console.error('❌ [FiscalNoteCreate] Erro ao criar cabeçalho:', headerError);
+                throw headerError;
+            }
+            
+            if (!headerData?.id) {
+                console.error('❌ [FiscalNoteCreate] Nota criada mas sem ID retornado');
+                throw new Error('Erro ao criar nota fiscal: ID não retornado');
+            }
+            
             const invoiceId = (headerData as any).id;
 
             // 2. Insert Items
@@ -138,8 +157,8 @@ export default function FiscalNoteCreate() {
                                 .select('id, quantity')
                                 .eq('internal_code', item.codigo_item);
 
-                            if (profile?.company_id) {
-                                query = query.eq('company_id', profile.company_id);
+                            if (company?.id) {
+                                query = query.eq('company_id', company.id);
                             }
 
                             const { data: product } = await query.single();
@@ -170,7 +189,7 @@ export default function FiscalNoteCreate() {
                                 await supabase
                                     .from('inventory_movements')
                                     .insert([{
-                                        company_id: profile?.company_id || null,
+                                        company_id: company?.id || null,
                                         product_id: productId,
                                         type: data.tipo === 'entrada' ? 'in' : 'out',
                                         quantity: item.quantidade,
@@ -208,10 +227,10 @@ export default function FiscalNoteCreate() {
             });
 
         } catch (error: any) {
-            console.error('Error saving fiscal note:', error);
+            console.error('❌ [FiscalNoteCreate] Erro ao salvar nota fiscal:', error);
             toast({
                 title: "Erro",
-                description: "Erro ao salvar nota fiscal: " + error.message,
+                description: `Erro ao salvar nota fiscal: ${error.message || 'Erro desconhecido'}`,
                 variant: "destructive"
             });
         }
@@ -384,7 +403,7 @@ export default function FiscalNoteCreate() {
                     const noteData: Partial<FiscalNote> = {
                         tipo: 'saida',
                         customer_id: sale.customer_id,
-                        establishment_id: profile?.company_id || '', // Você pode ajustar isso
+                        establishment_id: company?.id || '', // Você pode ajustar isso
                         data_emissao: new Date().toISOString().split('T')[0],
                         data_saida: new Date().toISOString().split('T')[0],
                         natureza_operacao: 'Venda de Mercadorias',

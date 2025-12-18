@@ -14,6 +14,7 @@ import { useNavigate } from 'react-router-dom';
 import { getPriceControlSettings, savePriceControlSettings, PriceControlSettings } from '@/services/priceControlService';
 import { Combobox } from '@/components/ui/combobox';
 import { sefazService } from '@/services/sefazService';
+import { certificateService } from '@/services/fiscal/certificateService';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 export default function Settings() {
@@ -178,21 +179,18 @@ export default function Settings() {
 
     setSavingFiscalConfig(true);
     try {
-      // Converter arquivo para base64 (se houver)
-      let certificadoBase64: string | null = null;
-      if (certificadoFile) {
-        const arrayBuffer = await certificadoFile.arrayBuffer();
-        // Converter ArrayBuffer para base64 sem usar Buffer
-        const bytes = new Uint8Array(arrayBuffer);
-        let binary = '';
-        for (let i = 0; i < bytes.byteLength; i++) {
-          binary += String.fromCharCode(bytes[i]);
-        }
-        certificadoBase64 = btoa(binary);
+      // Se houver certificado, salvar usando o certificateService
+      if (certificadoFile && fiscalConfig.senha_certificado) {
+        await certificateService.saveCertificate(
+          company.id,
+          certificadoFile,
+          fiscalConfig.senha_certificado,
+          fiscalConfig.cnpj.replace(/\D/g, ''),
+          fiscalConfig.uf
+        );
       }
 
-      // Salvar no banco
-      // Nota: O Supabase pode não aceitar BYTEA diretamente via JS, pode ser necessário usar uma função Edge ou converter
+      // Salvar configurações fiscais básicas
       const { error } = await supabase
         .from('fiscal_config')
         .upsert({
@@ -200,33 +198,28 @@ export default function Settings() {
           cnpj: fiscalConfig.cnpj.replace(/\D/g, ''),
           uf: fiscalConfig.uf,
           ambiente: fiscalConfig.ambiente,
-          // Por enquanto, vamos salvar apenas a referência do arquivo
-          // Em produção, você pode usar Supabase Storage ou uma função Edge para salvar o certificado
-          senha_certificado: fiscalConfig.senha_certificado || null,
+          senha_certificado: certificadoFile ? fiscalConfig.senha_certificado : undefined,
         }, {
           onConflict: 'company_id'
         });
 
       if (error) throw error;
 
-      // Se houver certificado, salvar em storage (opcional)
-      if (certificadoFile && certificadoBase64) {
-        // TODO: Implementar upload do certificado para Supabase Storage
-        // Por enquanto, apenas avisar que o certificado precisa ser configurado no servidor
-        toast({
-          title: 'Atenção',
-          description: 'Certificado selecionado. Em produção, configure o certificado no servidor.',
-        });
-      }
-
       toast({
         title: 'Sucesso',
-        description: 'Configurações fiscais salvas com sucesso!',
+        description: certificadoFile 
+          ? 'Configurações fiscais e certificado salvos com sucesso!'
+          : 'Configurações fiscais salvas com sucesso!',
       });
 
+      // Limpar formulário
       setCertificadoFile(null);
       setFiscalConfig(prev => ({ ...prev, senha_certificado: '' }));
+      
+      // Recarregar configurações
+      await loadFiscalConfig();
     } catch (error: any) {
+      console.error('Erro ao salvar configurações fiscais:', error);
       toast({
         title: 'Erro',
         description: error.message || 'Erro ao salvar configurações fiscais',

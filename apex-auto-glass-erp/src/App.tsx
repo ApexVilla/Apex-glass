@@ -30,8 +30,11 @@ import Settings from "./pages/Settings";
 import Suppliers from "./pages/Suppliers";
 import SupplierDetails from "./pages/Suppliers/SupplierDetails";
 import FinancialNatures from "./pages/FinancialNatures";
+import NFeVerification from "./pages/NFeVerification";
 import NotFound from "./pages/NotFound";
-import { Loader2 } from "lucide-react";
+
+import { LoadingProvider } from "@/contexts/LoadingContext";
+import { LoadingScreen } from "@/components/ui/loading-screen";
 
 const queryClient = new QueryClient();
 
@@ -39,11 +42,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
 
   if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
+    return <LoadingScreen message="Verificando autenticação..." />;
   }
 
   if (!user) {
@@ -93,6 +92,7 @@ function AppRoutes() {
         <Route path="/financial/natures" element={<FinancialNatures />} />
         <Route path="/suppliers" element={<Suppliers />} />
         <Route path="/suppliers/:id" element={<SupplierDetails />} />
+        <Route path="/fiscal/verificacao" element={<NFeVerification />} />
       </Route>
       <Route path="*" element={<NotFound />} />
     </Routes>
@@ -102,20 +102,22 @@ function AppRoutes() {
 const App = () => (
   <ErrorBoundary>
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Toaster />
-        <Sonner />
-        <BrowserRouter
-          future={{
-            v7_startTransition: true,
-            v7_relativeSplatPath: true,
-          }}
-        >
-          <AuthProvider>
-            <AppRoutes />
-          </AuthProvider>
-        </BrowserRouter>
-      </TooltipProvider>
+      <LoadingProvider>
+        <TooltipProvider>
+          <Toaster />
+          <Sonner />
+          <BrowserRouter
+            future={{
+              v7_startTransition: true,
+              v7_relativeSplatPath: true,
+            }}
+          >
+            <AuthProvider>
+              <AppRoutes />
+            </AuthProvider>
+          </BrowserRouter>
+        </TooltipProvider>
+      </LoadingProvider>
     </QueryClientProvider>
   </ErrorBoundary>
 );

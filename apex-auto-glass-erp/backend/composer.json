@@ -4,7 +4,14 @@
     "type": "project",
     "require": {
         "php": "^8.2",
-        "vlucas/phpdotenv": "^5.6"
+        "vlucas/phpdotenv": "^5.6",
+        "nfephp-org/sped-common": "^6.0",
+        "nfephp-org/sped-nfe": "^6.0",
+        "ext-openssl": "*",
+        "ext-soap": "*",
+        "ext-xml": "*",
+        "ext-dom": "*",
+        "ext-libxml": "*"
     },
     "autoload": {
         "psr-4": {

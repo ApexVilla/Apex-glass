@@ -44,13 +44,31 @@ if (typeof window !== 'undefined') {
   }
 }
 
-// Garantir que as variáveis existem antes de criar o cliente
-if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
+// Garantir que as variáveis existem e não são placeholders
+const isPlaceholder = (value: string | undefined) => {
+  return !value || 
+         value === 'placeholder-key' || 
+         value === 'https://placeholder.supabase.co' ||
+         value.startsWith('sua-') ||
+         value.startsWith('seu-');
+};
+
+if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY || 
+    isPlaceholder(SUPABASE_URL) || isPlaceholder(SUPABASE_PUBLISHABLE_KEY)) {
   // Se chegou aqui em produção, já lançou erro acima
   // Em desenvolvimento, ainda permite continuar com placeholders para não quebrar o dev server
   if (import.meta.env.MODE === 'production' || import.meta.env.PROD) {
-    throw new Error('Variáveis de ambiente do Supabase são obrigatórias');
+    throw new Error('Variáveis de ambiente do Supabase são obrigatórias e não podem ser placeholders');
   }
+}
+
+// Log de diagnóstico (apenas em desenvolvimento)
+if (import.meta.env.DEV) {
+  console.log('🔍 Diagnóstico Supabase:', {
+    url: SUPABASE_URL ? `${SUPABASE_URL.substring(0, 30)}...` : '❌ Não configurado',
+    key: SUPABASE_PUBLISHABLE_KEY ? `${SUPABASE_PUBLISHABLE_KEY.substring(0, 20)}...` : '❌ Não configurado',
+    keyLength: SUPABASE_PUBLISHABLE_KEY?.length || 0,
+  });
 }
 
 export const supabase = createClient<Database>(

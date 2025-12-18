@@ -164,6 +164,14 @@ export default function Financial() {
 
   const loadReceivables = async () => {
     try {
+      if (!company?.id) {
+        console.error('❌ [Financial] company.id não disponível');
+        setReceivables([]);
+        setFilteredReceivables([]);
+        setReceivablesTotal(0);
+        return;
+      }
+
       let query = supabase
         .from('accounts_receivable')
         .select(`
@@ -171,9 +179,9 @@ export default function Financial() {
           customer:customers(id, name),
           nature:financial_natures(*),
           cost_center:cost_centers(*),
-          destination_account:financial_accounts(*),
-          seller:profiles!accounts_receivable_seller_id_fkey(id, full_name)
-        `, { count: 'exact' });
+          destination_account:financial_accounts(*)
+        `, { count: 'exact' })
+        .eq('company_id', company.id);
 
       // Filtros
       if (receivableFilters.status !== 'all') {
@@ -292,6 +300,14 @@ export default function Financial() {
 
   const loadPayables = async () => {
     try {
+      if (!company?.id) {
+        console.error('❌ [Financial] company.id não disponível');
+        setPayables([]);
+        setFilteredPayables([]);
+        setPayablesTotal(0);
+        return;
+      }
+
       let query = supabase
         .from('accounts_payable')
         .select(`
@@ -300,7 +316,8 @@ export default function Financial() {
           nature:financial_natures(*),
           cost_center:cost_centers(*),
           origin_account:financial_accounts(*)
-        `, { count: 'exact' });
+        `, { count: 'exact' })
+        .eq('company_id', company.id);
 
       // Filtros
       if (payableFilters.status !== 'all') {
@@ -454,15 +471,23 @@ export default function Financial() {
 
   const loadCashMovements = async () => {
     try {
+      if (!company?.id) {
+        console.error('❌ [Financial] company.id não disponível');
+        setCashMovements([]);
+        setFilteredCashMovements([]);
+        setCashTotal(0);
+        return;
+      }
+
       let query = supabase
         .from('financial_movements')
         .select(`
           *,
           account:financial_accounts(*),
           nature:financial_natures(*),
-          cost_center:cost_centers(*),
-          operator:profiles!financial_movements_operator_id_fkey(id, full_name)
-        `, { count: 'exact' });
+          cost_center:cost_centers(*)
+        `, { count: 'exact' })
+        .eq('company_id', company.id);
 
       // Filtros
       if (cashFilters.date) {
