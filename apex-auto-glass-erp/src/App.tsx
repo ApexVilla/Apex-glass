@@ -1,3 +1,4 @@
+import React from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -36,7 +37,15 @@ import NotFound from "./pages/NotFound";
 import { LoadingProvider } from "@/contexts/LoadingContext";
 import { LoadingScreen } from "@/components/ui/loading-screen";
 
-const queryClient = new QueryClient();
+// Criar QueryClient dentro de uma função para evitar problemas com múltiplas instâncias
+const createQueryClient = () => new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+  },
+});
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -99,27 +108,32 @@ function AppRoutes() {
   );
 }
 
-const App = () => (
-  <ErrorBoundary>
-    <QueryClientProvider client={queryClient}>
-      <LoadingProvider>
-        <TooltipProvider>
-          <Toaster />
-          <Sonner />
-          <BrowserRouter
-            future={{
-              v7_startTransition: true,
-              v7_relativeSplatPath: true,
-            }}
-          >
-            <AuthProvider>
-              <AppRoutes />
-            </AuthProvider>
-          </BrowserRouter>
-        </TooltipProvider>
-      </LoadingProvider>
-    </QueryClientProvider>
-  </ErrorBoundary>
-);
+const App = () => {
+  // Criar QueryClient dentro do componente para garantir uma única instância
+  const [queryClient] = React.useState(() => createQueryClient());
+
+  return (
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <LoadingProvider>
+          <TooltipProvider>
+            <Toaster />
+            <Sonner />
+            <BrowserRouter
+              future={{
+                v7_startTransition: true,
+                v7_relativeSplatPath: true,
+              }}
+            >
+              <AuthProvider>
+                <AppRoutes />
+              </AuthProvider>
+            </BrowserRouter>
+          </TooltipProvider>
+        </LoadingProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
+  );
+};
 
 export default App;

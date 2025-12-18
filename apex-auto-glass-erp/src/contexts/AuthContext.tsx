@@ -46,6 +46,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const fetchingProfileRef = useRef(false);
   const lastProcessedUserIdRef = useRef<string | null>(null);
   const loadingRef = useRef(false);
+  const initialSessionProcessedRef = useRef(false); // Ref para rastrear INITIAL_SESSION processado
 
   const fetchPermissions = async (userId: string) => {
     try {
@@ -496,9 +497,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       }
     };
-
-    // Ref para rastrear se já processamos INITIAL_SESSION
-    const initialSessionProcessedRef = useRef(false);
     
     // Listener para mudanças de autenticação
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
