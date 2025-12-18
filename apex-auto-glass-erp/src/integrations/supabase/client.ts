@@ -81,6 +81,12 @@ export const supabase = createClient<Database>(
       autoRefreshToken: true,
       detectSessionInUrl: true,
       storageKey: 'apex-glass-auth', // Chave fixa para evitar problemas entre origens
-    }
+      flowType: 'pkce', // Usar PKCE para melhor segurança e estabilidade
+    },
+    global: {
+      headers: {
+        'x-client-info': 'apex-glass-erp@1.0.0',
+      },
+    },
   }
 );

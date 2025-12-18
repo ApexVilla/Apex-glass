@@ -497,14 +497,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
+    // Ref para rastrear se já processamos INITIAL_SESSION
+    const initialSessionProcessedRef = useRef(false);
+    
     // Listener para mudanças de autenticação
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        console.log('Auth state changed:', event, session ? 'Session exists' : 'No session');
+        // Ignorar INITIAL_SESSION se já foi processado (evita loops)
+        if (event === 'INITIAL_SESSION' && initialSessionProcessedRef.current) {
+          console.log('⏸️ INITIAL_SESSION já processado, ignorando');
+          if (mounted) {
+            setLoadingState(false);
+          }
+          return;
+        }
+        
+        // Marcar INITIAL_SESSION como processado
+        if (event === 'INITIAL_SESSION') {
+          initialSessionProcessedRef.current = true;
+        }
+        
+        // Log apenas para eventos importantes (não INITIAL_SESSION repetido)
+        if (event !== 'INITIAL_SESSION' || !initialSessionProcessedRef.current) {
+          console.log('Auth state changed:', event, session ? 'Session exists' : 'No session');
+        }
         
         // Se for evento de SIGNED_OUT, garantir que não restaure a sessão
         if (event === 'SIGNED_OUT') {
           console.log('✅ Logout confirmado pelo Supabase');
+          initialSessionProcessedRef.current = false; // Reset para permitir nova sessão
           // Limpar estado completamente
           if (mounted) {
             setSession(null);

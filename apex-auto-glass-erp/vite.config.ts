@@ -36,10 +36,14 @@ export default defineConfig({
     assetsDir: 'assets',
     sourcemap: false,
     minify: 'esbuild',
+    cssCodeSplit: true, // Separar CSS para melhor carregamento
     rollupOptions: {
       output: {
         manualChunks: undefined,
       },
     },
+  },
+  css: {
+    devSourcemap: false, // Desabilitar sourcemap CSS em dev para melhor performance
   },
 });
